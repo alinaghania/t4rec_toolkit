@@ -1,10 +1,10 @@
-# === ENTRAÎNEMENT DU MODÈLE T4REC - VERSION AVEC DIAGNOSTICS ===
+# === ENTRAÎNEMENT DU MODÈLE T4REC - VERSION XLNET ===
 
-print("🚀 ENTRAÎNEMENT DU MODÈLE")
+print("🚀 ENTRAÎNEMENT DU MODÈLE XLNET")
 print("=" * 50)
 
 # Imports
-from t4rec_toolkit.models import ModelRegistry, GPT2ModelBuilder, create_model
+from t4rec_toolkit.models import ModelRegistry, XLNetModelBuilder, create_model
 from t4rec_toolkit.models.registry import get_available_models
 import torch
 import transformers4rec.torch as tr
@@ -38,7 +38,7 @@ try:
             tags={Tags.CONTINUOUS, Tags.LIST},
             dtype="float32",
             is_list=True,
-            properties={"max_sequence_length": 15}
+            properties={"max_sequence_length": 20}
         )
         columns.append(column)
         print(f"   ✅ Séquence continue: {feature_name}")
@@ -58,7 +58,7 @@ try:
             tags={Tags.CATEGORICAL},
             dtype="int32",
             is_list=False,
-            properties={"vocab_size": 15}
+            properties={"vocab_size": 20}  # Augmenté pour XLNet
         )
         columns.append(column)
         print(f"   ✅ Catégorielle: {feature_name}")
@@ -67,10 +67,10 @@ try:
     schema = Schema(columns)
     print(f"✅ Schéma créé avec {len(sequence_features) + len(categorical_features)} features")
     
-    # 3. Convertir le schéma pour le registry
+    # 3. Convertir le schéma pour le registry - VERSION XLNET
     schema_dict = {
         "feature_specs": [],
-        "sequence_length": 15
+        "sequence_length": 20  # XLNet gère mieux les séquences plus longues
     }
     
     for column in columns:
@@ -87,139 +87,122 @@ try:
             
         schema_dict["feature_specs"].append(spec)
     
-    print(f"🔧 Schéma converti pour le registry: {len(schema_dict['feature_specs'])} specs")
+    print(f"🔧 Schéma converti pour XLNet: {len(schema_dict['feature_specs'])} specs")
     
-    # 4. Test de création du module d'entrée AVANT de créer le modèle complet
-    print("\n🧪 TEST DU MODULE D'ENTRÉE")
-    print("-" * 30)
+    # 4. Test de création du module d'entrée XLNET
+    print("\n🧪 TEST DU MODULE D'ENTRÉE XLNET")
+    print("-" * 35)
     
-    builder = GPT2ModelBuilder()
+    builder = XLNetModelBuilder()
+    
+    # Configuration optimisée pour XLNet
+    xlnet_config = {
+        'd_model': 256,         # XLNet supporte mieux des dimensions plus grandes
+        'n_head': 8,            # Plus de têtes d'attention
+        'n_layer': 4,           # Plus de couches pour XLNet
+        'max_sequence_length': 20,  # Séquences plus longues
+        'mem_len': 50,          # Mémoire pour XLNet
+        'dropout': 0.1,
+        'masking': 'mlm',       # MLM pour XLNet
+        'attn_type': 'bi'       # Attention bidirectionnelle
+    }
     
     # Test de création du module d'entrée
     try:
         test_input_module = builder.build_input_module(
             schema_dict, 
-            d_model=192, 
-            max_sequence_length=15, 
-            masking="clm"
+            d_model=xlnet_config['d_model'], 
+            max_sequence_length=xlnet_config['max_sequence_length'], 
+            masking=xlnet_config['masking']
         )
         
         if test_input_module is not None:
-            print("✅ Module d'entrée créé avec succès")
+            print("✅ Module d'entrée XLNet créé avec succès")
             print(f"   Type: {type(test_input_module).__name__}")
             print(f"   Masking: {getattr(test_input_module, 'masking', 'NON DÉFINI')}")
         else:
-            print("❌ Module d'entrée retourne None")
+            print("❌ Module d'entrée XLNet retourne None")
             
     except Exception as e:
-        print(f"❌ Erreur création module d'entrée: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"❌ Erreur création module d'entrée XLNet: {e}")
     
-    # 5. Diagnostic complet en cas de problème
-    print("\n🔍 DIAGNOSTIC COMPLET")
-    print("-" * 30)
-    
-    # Diagnostic des imports
-    diagnostics = {
-        "transformers4rec": False,
-        "merlin_schema": False,
-        "torch": False
-    }
+    # 5. Test spécifique XLNet avec TabularSequenceFeatures
+    print("\n🔍 TEST TABULARSEQUENCEFEATURES AVEC XLNET")
+    print("-" * 45)
     
     try:
-        import transformers4rec.torch as tr
-        diagnostics["transformers4rec"] = True
-        print("✅ transformers4rec.torch disponible")
-        
-        # Test TabularSequenceFeatures
-        try:
-            # Créer un schéma minimal pour test
-            test_col = ColumnSchema(
-                name="test_item",
+        # Test direct avec un schéma minimal
+        test_schema_simple = Schema([
+            ColumnSchema(
+                name="item_id", 
                 tags={Tags.CATEGORICAL, Tags.ITEM, Tags.ID},
                 dtype="int32",
-                properties={"vocab_size": 100}
+                properties={"vocab_size": 1000}
             )
-            test_schema = Schema([test_col])
-            
-            test_module = tr.TabularSequenceFeatures.from_schema(
-                schema=test_schema,
-                max_sequence_length=10,
-                continuous_projection=64,
-                aggregation="concat",
-                masking="clm"
-            )
-            
-            if test_module is not None:
-                print("✅ TabularSequenceFeatures.from_schema fonctionne")
-            else:
-                print("❌ TabularSequenceFeatures.from_schema retourne None")
-                
-        except Exception as e:
-            print(f"❌ TabularSequenceFeatures.from_schema échoue: {e}")
-            
-    except ImportError as e:
-        print(f"❌ transformers4rec.torch non disponible: {e}")
-    
-    try:
-        from merlin.schema import Schema, ColumnSchema, Tags
-        diagnostics["merlin_schema"] = True
-        print("✅ merlin.schema disponible")
-    except ImportError as e:
-        print(f"❌ merlin.schema non disponible: {e}")
-    
-    try:
-        import torch
-        diagnostics["torch"] = True
-        print("✅ torch disponible")
-    except ImportError as e:
-        print(f"❌ torch non disponible: {e}")
-    
-    # 6. Créer le modèle seulement si les tests sont OK
-    if test_input_module is not None:
-        print("\n🏗️ CRÉATION DU MODÈLE COMPLET")
-        print("-" * 30)
+        ])
         
-        model = create_model(
-            architecture="gpt2",
-            schema=schema_dict,
-            d_model=192,
-            n_head=6,
-            n_layer=3,
-            max_sequence_length=15,
-            dropout=0.1,
-            attn_dropout=0.1,
-            resid_dropout=0.1,
-            embd_dropout=0.1
+        direct_module = tr.TabularSequenceFeatures.from_schema(
+            schema=test_schema_simple,
+            max_sequence_length=20,
+            continuous_projection=256,
+            aggregation="concat",
+            masking="mlm"
         )
         
-        print("✅ Modèle GPT2 créé via registry")
+        if direct_module is not None:
+            print("✅ TabularSequenceFeatures direct fonctionne avec schéma minimal")
+        else:
+            print("❌ TabularSequenceFeatures direct échoue même avec schéma minimal")
+            
+    except Exception as e:
+        print(f"❌ TabularSequenceFeatures direct échoue: {e}")
+    
+    # 6. Créer le modèle XLNet si les tests sont OK
+    if test_input_module is not None:
+        print("\n🏗️ CRÉATION DU MODÈLE XLNET COMPLET")
+        print("-" * 35)
+        
+        model = create_model(
+            architecture="xlnet",  # Utiliser XLNet au lieu de GPT2
+            schema=schema_dict,
+            **xlnet_config
+        )
+        
+        print("✅ Modèle XLNet créé via registry")
         print(f"📈 Paramètres du modèle: {sum(p.numel() for p in model.parameters()):,}")
         
-        # Continuer avec l'entraînement...
-        print("\n📊 PRÉPARATION DES DONNÉES")
-        print("-" * 30)
+        # Configuration spécifique XLNet
+        print(f"📊 Configuration XLNet:")
+        print(f"   - d_model: {xlnet_config['d_model']}")
+        print(f"   - n_head: {xlnet_config['n_head']}")
+        print(f"   - n_layer: {xlnet_config['n_layer']}")
+        print(f"   - mem_len: {xlnet_config['mem_len']}")
+        print(f"   - masking: {xlnet_config['masking']}")
         
-        # 4. Préparer les données d'entraînement
+        # Continuer avec l'entraînement...
+        print("\n📊 PRÉPARATION DES DONNÉES POUR XLNET")
+        print("-" * 40)
+        
         from sklearn.model_selection import train_test_split
         import numpy as np
 
-        def prepare_torch_data(tabular_data):
-            """Convertit les données tabulaires en format torch."""
+        def prepare_torch_data_xlnet(tabular_data):
+            """Convertit les données tabulaires en format torch pour XLNet."""
             torch_data = {}
             for feature_name, feature_data in tabular_data.items():
                 if isinstance(feature_data, np.ndarray):
                     if 'sequence' in feature_name:
+                        # XLNet gère mieux les séquences float32
                         torch_data[feature_name] = torch.tensor(feature_data, dtype=torch.float32)
                     else:
-                        torch_data[feature_name] = torch.tensor(feature_data, dtype=torch.long)
+                        # Features catégorielles en int32
+                        torch_data[feature_name] = torch.tensor(feature_data, dtype=torch.int32)
                 else:
-                    torch_data[feature_name] = torch.tensor(feature_data, dtype=torch.long)
+                    torch_data[feature_name] = torch.tensor(feature_data, dtype=torch.int32)
             return torch_data
 
         # Préparer les features et target
-        X_torch = prepare_torch_data(tabular_data)
+        X_torch = prepare_torch_data_xlnet(tabular_data)
         y = df['souscription_produit_1m'].values
 
         # Encoder le target
@@ -245,26 +228,28 @@ try:
         print(f"   Train: {len(train_indices)} échantillons")
         print(f"   Validation: {len(val_indices)} échantillons")
 
-        # 5. Configuration de l'entraînement
-        print("\n⚙️ CONFIGURATION DE L'ENTRAÎNEMENT")
-        print("-" * 30)
+        # 7. Configuration de l'entraînement optimisée pour XLNet
+        print("\n⚙️ CONFIGURATION DE L'ENTRAÎNEMENT XLNET")
+        print("-" * 40)
         
         from torch.optim import AdamW
         from torch.nn import CrossEntropyLoss
 
-        optimizer = AdamW(model.parameters(), lr=1e-4, weight_decay=0.01)
+        # XLNet bénéficie d'un learning rate légèrement plus faible
+        optimizer = AdamW(model.parameters(), lr=5e-5, weight_decay=0.01)
         criterion = CrossEntropyLoss()
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         model.to(device)
 
         print(f"Device utilisé: {device}")
+        print(f"Learning rate: 5e-5 (optimisé pour XLNet)")
 
-        # 6. Entraînement
-        print("\n🎯 ENTRAÎNEMENT")
-        print("-" * 30)
+        # 8. Entraînement avec XLNet
+        print("\n🎯 ENTRAÎNEMENT XLNET")
+        print("-" * 25)
         
-        num_epochs = 10
-        batch_size = 32
+        num_epochs = 15  # XLNet peut bénéficier de plus d'époques
+        batch_size = 24  # Batch size réduit pour XLNet plus grand
 
         train_losses = []
         val_losses = []
@@ -286,6 +271,10 @@ try:
                 loss = criterion(outputs, batch_y)
 
                 loss.backward()
+                
+                # Gradient clipping pour XLNet
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                
                 optimizer.step()
 
                 total_train_loss += loss.item()
@@ -315,11 +304,16 @@ try:
             train_losses.append(avg_train_loss)
             val_losses.append(avg_val_loss)
 
-            print(f"Époque {epoch+1}/{num_epochs}: Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
+            # Affichage périodique pour XLNet
+            if (epoch + 1) % 3 == 0 or epoch == 0:
+                print(f"Époque {epoch+1}/{num_epochs}: Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
 
-        print("✅ Entraînement terminé!")
+        print("✅ Entraînement XLNet terminé!")
 
-        # 7. Évaluation finale
+        # 9. Évaluation finale
+        print("\n📈 ÉVALUATION FINALE XLNET")
+        print("-" * 30)
+        
         model.eval()
         with torch.no_grad():
             val_outputs = model({k: v.to(device) for k, v in X_val.items()})
@@ -328,123 +322,101 @@ try:
             correct = (val_predictions == y_val.to(device)).sum().item()
             accuracy = correct / len(y_val)
             
-            print(f"Accuracy finale: {accuracy:.2%}")
+            print(f"Accuracy finale XLNet: {accuracy:.2%}")
+            
+            # Métriques additionnelles pour XLNet
+            from sklearn.metrics import classification_report, confusion_matrix
+            
+            y_true = y_val.cpu().numpy()
+            y_pred = val_predictions.cpu().numpy()
+            
+            print("\nRapport de classification:")
+            print(classification_report(y_true, y_pred, target_names=label_encoder.classes_))
 
-        # 8. Sauvegarder le modèle
+        # 10. Sauvegarder le modèle XLNet
         torch.save({
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'schema': schema_dict,
             'merlin_schema': schema,
             'label_encoder': label_encoder,
+            'xlnet_config': xlnet_config,
             'epoch': num_epochs,
             'train_losses': train_losses,
             'val_losses': val_losses,
-            'final_accuracy': accuracy
-        }, 't4rec_model.pth')
+            'final_accuracy': accuracy,
+            'model_type': 'xlnet'
+        }, 't4rec_xlnet_model.pth')
 
-        print("💾 Modèle sauvegardé: t4rec_model.pth")
+        print("💾 Modèle XLNet sauvegardé: t4rec_xlnet_model.pth")
+        
+        # 11. Visualisation des résultats (optionnel)
+        print("\n📊 RÉSUMÉ DE L'ENTRAÎNEMENT")
+        print("-" * 35)
+        print(f"Architecture: XLNet")
+        print(f"Features: {len(schema_dict['feature_specs'])}")
+        print(f"Séquences: {len(sequence_features)}")
+        print(f"Catégorielles: {len(categorical_features)}")
+        print(f"Époques: {num_epochs}")
+        print(f"Batch size: {batch_size}")
+        print(f"Learning rate: 5e-5")
+        print(f"Accuracy finale: {accuracy:.2%}")
+        print(f"Loss finale train: {train_losses[-1]:.4f}")
+        print(f"Loss finale val: {val_losses[-1]:.4f}")
         
     else:
-        print("\n❌ ABANDON DE LA CRÉATION DU MODÈLE")
-        print("Le module d'entrée ne peut pas être créé.")
-        print("\n💡 SOLUTIONS POSSIBLES:")
-        print("1. Vérifiez l'installation: pip install transformers4rec==23.04.00 merlin-core")
-        print("2. Vérifiez les versions des dépendances")
-        print("3. Redémarrez le kernel")
+        print("\n❌ ABANDON - MODULE D'ENTRÉE XLNET ÉCHOUE")
+        print("Le module d'entrée XLNet ne peut pas être créé.")
+        
+        # Test de fallback avec un modèle très simple
+        print("\n🔄 TEST FALLBACK AVEC MODÈLE PYTORCH NATIF")
+        print("-" * 45)
+        
+        # Créer un modèle PyTorch simple en fallback
+        class SimpleBankingModel(torch.nn.Module):
+            def __init__(self, n_features, n_classes):
+                super().__init__()
+                self.n_features = n_features
+                self.n_classes = n_classes
+                
+                # Couches simples
+                self.fc1 = torch.nn.Linear(n_features, 128)
+                self.fc2 = torch.nn.Linear(128, 64)
+                self.fc3 = torch.nn.Linear(64, n_classes)
+                self.dropout = torch.nn.Dropout(0.2)
+                self.relu = torch.nn.ReLU()
+                
+            def forward(self, x):
+                # Aplatir toutes les features en un vecteur
+                if isinstance(x, dict):
+                    # Concaténer toutes les features
+                    features = []
+                    for key, value in x.items():
+                        if value.dim() > 2:
+                            value = value.mean(dim=1)  # Moyenner les séquences
+                        if value.dim() == 1:
+                            value = value.unsqueeze(1)
+                        features.append(value.float())
+                    x = torch.cat(features, dim=1)
+                
+                x = self.relu(self.fc1(x))
+                x = self.dropout(x)
+                x = self.relu(self.fc2(x))
+                x = self.dropout(x)
+                x = self.fc3(x)
+                return x
+        
+        print("✅ Modèle PyTorch simple créé en fallback")
+        print("Ce modèle peut être utilisé si T4Rec ne fonctionne pas.")
 
 except Exception as e:
-    print(f"\n❌ ERREUR LORS DE L'ENTRAÎNEMENT: {e}")
+    print(f"\n❌ ERREUR LORS DE L'ENTRAÎNEMENT XLNET: {e}")
     import traceback
     traceback.print_exc()
     
-    # Diagnostic final
-    print("\n🔍 DIAGNOSTIC FINAL:")
-    print("="*50)
-    
-    try:
-        from t4rec_toolkit.models.gpt2_builder import diagnose_gpt2_creation_failure
-        diagnosis = diagnose_gpt2_creation_failure(schema_dict if 'schema_dict' in locals() else {})
-        
-        print("📊 Analyse du schéma:")
-        for key, value in diagnosis["schema_analysis"].items():
-            print(f"   {key}: {value}")
-            
-        print("\n⚙️ Analyse de la configuration:")
-        for key, value in diagnosis["config_analysis"].items():
-            print(f"   {key}: {value}")
-            
-        print("\n📦 Vérification des imports:")
-        for key, value in diagnosis["import_checks"].items():
-            status = "✅" if value else "❌"
-            print(f"   {status} {key}: {value}")
-            
-        print("\n💡 Recommandations:")
-        for i, rec in enumerate(diagnosis["recommendations"], 1):
-            print(f"   {i}. {rec}")
-            
-    except ImportError:
-        print("Module de diagnostic non disponible")
-        
-        # Diagnostic manuel basique
-        print("\n📦 Vérification manuelle des imports:")
-        
-        try:
-            import transformers4rec
-            print(f"✅ transformers4rec version: {transformers4rec.__version__}")
-        except ImportError as e:
-            print(f"❌ transformers4rec non disponible: {e}")
-            
-        try:
-            from merlin.schema import Schema
-            print("✅ merlin.schema disponible")
-        except ImportError as e:
-            print(f"❌ merlin.schema non disponible: {e}")
-            
-        try:
-            import torch
-            print(f"✅ torch version: {torch.__version__}")
-        except ImportError as e:
-            print(f"❌ torch non disponible: {e}")
-            
-        print("\n💡 Solutions recommandées:")
-        print("1. pip install transformers4rec==23.04.00")
-        print("2. pip install merlin-core")
-        print("3. pip install torch")
-        print("4. Redémarrer le kernel Jupyter")
-        print("5. Vérifier les conflits de dépendances: pip list | grep -E '(transformers4rec|merlin|torch)'")
-    
-    except Exception as diag_error:
-        print(f"Erreur lors du diagnostic: {diag_error}")
-        
-        print("\n🔧 DIAGNOSTIC MANUEL DE BASE:")
-        print("-" * 40)
-        
-        # Vérifications de base
-        import sys
-        print(f"Python version: {sys.version}")
-        
-        # Vérifier les variables locales disponibles
-        print(f"\nVariables disponibles:")
-        local_vars = [var for var in locals().keys() if not var.startswith('_')]
-        for var in sorted(local_vars):
-            print(f"   - {var}")
-            
-        # Informations sur l'erreur
-        if 'e' in locals():
-            print(f"\nDernière erreur: {type(e).__name__}: {e}")
-            
-        print("\n📋 CHECKLIST DE DÉPANNAGE:")
-        print("□ Vérifier que transformers4rec==23.04.00 est installé")
-        print("□ Vérifier que merlin-core est installé") 
-        print("□ Vérifier que torch est installé")
-        print("□ Redémarrer le kernel Jupyter")
-        print("□ Vérifier les données d'entrée (variables 'tabular_data' et 'df')")
-        print("□ Essayer avec un schéma plus simple")
-        print("□ Consulter les logs détaillés ci-dessus")
-        
-        print("\n🆘 SI LE PROBLÈME PERSISTE:")
-        print("1. Copier l'erreur complète")
-        print("2. Vérifier la compatibilité des versions")
-        print("3. Tester avec un exemple minimal")
-        print("4. Consulter la documentation Transformers4Rec 23.04")
+    print("\n🔍 SUGGESTIONS XLNET:")
+    print("1. XLNet nécessite plus de mémoire que GPT2")
+    print("2. Réduire batch_size si erreur de mémoire")
+    print("3. Réduire d_model si nécessaire")
+    print("4. XLNet fonctionne mieux avec MLM masking")
+    print("5. Essayer avec CPU si problème GPU: device='cpu'")
