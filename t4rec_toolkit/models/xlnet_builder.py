@@ -125,12 +125,17 @@ class XLNetModelBuilder(BaseModelBuilder):
        
        # Valider masking
        valid_masking = ['mlm', 'plm', 'clm']
-       if config['masking'] not in valid_masking:
+       if config['masking'] is not None and config['masking'] not in valid_masking:
            raise ConfigurationError(
                f"masking invalide: {config['masking']}",
                config_key="masking",
                valid_values=valid_masking
            )
+       
+       # Si masking est None, utiliser MLM par défaut pour XLNet
+       if config['masking'] is None:
+           config['masking'] = 'mlm'
+           logger.info("Masking None détecté, utilisation de MLM par défaut pour XLNet")
        
        # Ajuster projection_dim si None
        if config['projection_dim'] is None:
