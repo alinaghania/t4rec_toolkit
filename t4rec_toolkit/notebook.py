@@ -1,7 +1,7 @@
-# === ENTRAÎNEMENT DU MODÈLE T4REC - VERSION XLNET CORRIGÉE ===
+# === ENTRAÎNEMENT DU MODÈLE T4REC - VERSION XLNET FINALE ===
 
-print("🚀 ENTRAÎNEMENT DU MODÈLE XLNET CORRIGÉ")
-print("=" * 55)
+print("🚀 ENTRAÎNEMENT DU MODÈLE XLNET FINAL")
+print("=" * 50)
 
 # Imports
 from t4rec_toolkit.models import ModelRegistry, XLNetModelBuilder, create_model
@@ -163,266 +163,274 @@ try:
     
     print(f"   📈 Données préparées avec item_id: {len(tabular_data_with_itemid)} features")
     
-    # 5. Test de création du modèle XLNet avec item_id
-    print("\n🧪 TEST DU MODÈLE XLNET AVEC ITEM_ID")
-    print("-" * 40)
+    # 5. Configuration XLNet CORRECTE avec MLM masking
+    print("\n⚙️ CONFIGURATION XLNET")
+    print("-" * 25)
     
-    # Configuration XLNet sans masking pour éviter les problèmes
-    xlnet_config_safe = {
+    xlnet_config = {
         'd_model': 256,
         'n_head': 8,
         'n_layer': 4,
         'max_sequence_length': 20,
         'mem_len': 50,
         'dropout': 0.1,
-        'masking': None,  # Désactiver le masking temporairement
+        'masking': 'mlm',  # MLM masking valide pour XLNet
         'attn_type': 'bi'
     }
     
-    print("Configuration XLNet (masking désactivé pour test):")
-    for key, value in xlnet_config_safe.items():
+    print("Configuration XLNet finale:")
+    for key, value in xlnet_config.items():
         print(f"   {key}: {value}")
     
-    try:
-        # Test de création du modèle
-        model = create_model(
-            architecture="xlnet",
-            schema=schema_dict,
-            **xlnet_config_safe
-        )
-        
-        print("✅ Modèle XLNet créé avec succès (sans masking)")
-        print(f"📈 Paramètres du modèle: {sum(p.numel() for p in model.parameters()):,}")
-        
-        model_created = True
-        
-    except Exception as e:
-        print(f"❌ Échec création modèle XLNet: {e}")
-        model_created = False
+    # 6. Créer le modèle XLNet avec la configuration correcte
+    print("\n🏗️ CRÉATION DU MODÈLE XLNET")
+    print("-" * 30)
     
-    # 6. Si le modèle est créé, procéder à l'entraînement
-    if model_created:
-        print("\n🎯 ENTRAÎNEMENT DU MODÈLE XLNET")
-        print("-" * 35)
-        
-        from sklearn.model_selection import train_test_split
-        
-        def prepare_torch_data_with_itemid(data_dict):
-            """Convertit les données avec item_id en format torch."""
-            torch_data = {}
-            for feature_name, feature_data in data_dict.items():
-                if isinstance(feature_data, np.ndarray):
-                    if 'sequence' in feature_name:
-                        torch_data[feature_name] = torch.tensor(feature_data, dtype=torch.float32)
-                    else:
-                        torch_data[feature_name] = torch.tensor(feature_data, dtype=torch.int32)
+    model = create_model(
+        architecture="xlnet",
+        schema=schema_dict,
+        **xlnet_config
+    )
+    
+    print("✅ Modèle XLNet créé avec succès!")
+    print(f"📈 Paramètres du modèle: {sum(p.numel() for p in model.parameters()):,}")
+    
+    # 7. Préparation des données pour l'entraînement
+    print("\n📊 PRÉPARATION DES DONNÉES POUR L'ENTRAÎNEMENT")
+    print("-" * 45)
+    
+    from sklearn.model_selection import train_test_split
+    
+    def prepare_torch_data_complete(data_dict):
+        """Convertit les données avec item_id en format torch."""
+        torch_data = {}
+        for feature_name, feature_data in data_dict.items():
+            if isinstance(feature_data, np.ndarray):
+                if 'sequence' in feature_name:
+                    # Séquences en float32
+                    torch_data[feature_name] = torch.tensor(feature_data, dtype=torch.float32)
+                elif feature_name == 'item_id':
+                    # Item ID en long pour l'embedding
+                    torch_data[feature_name] = torch.tensor(feature_data, dtype=torch.long)
+                else:
+                    # Autres features catégorielles en int32
+                    torch_data[feature_name] = torch.tensor(feature_data, dtype=torch.int32)
+            else:
+                if feature_name == 'item_id':
+                    torch_data[feature_name] = torch.tensor(feature_data, dtype=torch.long)
                 else:
                     torch_data[feature_name] = torch.tensor(feature_data, dtype=torch.int32)
-            return torch_data
+        return torch_data
 
-        # Préparer les données avec item_id
-        X_torch = prepare_torch_data_with_itemid(tabular_data_with_itemid)
-        y = df['souscription_produit_1m'].values
+    # Préparer les données avec item_id
+    X_torch = prepare_torch_data_complete(tabular_data_with_itemid)
+    y = df['souscription_produit_1m'].values
 
-        # Encoder le target
-        label_encoder = LabelEncoder()
-        y_encoded = label_encoder.fit_transform(y)
-        y_torch = torch.tensor(y_encoded, dtype=torch.long)
+    # Encoder le target
+    label_encoder = LabelEncoder()
+    y_encoded = label_encoder.fit_transform(y)
+    y_torch = torch.tensor(y_encoded, dtype=torch.long)
 
-        print(f"Features avec item_id: {len(X_torch)}")
-        print(f"Target classes: {len(label_encoder.classes_)}")
+    print(f"✅ Features avec item_id: {len(X_torch)}")
+    print(f"✅ Target classes: {len(label_encoder.classes_)}")
+    print(f"✅ Item_id range: {item_ids.min()} - {item_ids.max()}")
 
-        # Split train/validation
-        indices = np.arange(len(y_torch))
-        train_indices, val_indices = train_test_split(
-            indices, test_size=0.2, random_state=42, stratify=y_encoded
-        )
+    # Vérifier la forme des données
+    for name, data in list(X_torch.items())[:3]:  # Afficher les 3 premières
+        print(f"   {name}: shape={data.shape}, dtype={data.dtype}")
 
-        X_train = {k: v[train_indices] for k, v in X_torch.items()}
-        X_val = {k: v[val_indices] for k, v in X_torch.items()}
-        y_train = y_torch[train_indices]
-        y_val = y_torch[val_indices]
+    # Split train/validation
+    indices = np.arange(len(y_torch))
+    train_indices, val_indices = train_test_split(
+        indices, test_size=0.2, random_state=42, stratify=y_encoded
+    )
 
-        print(f"Train: {len(train_indices)} échantillons")
-        print(f"Validation: {len(val_indices)} échantillons")
+    X_train = {k: v[train_indices] for k, v in X_torch.items()}
+    X_val = {k: v[val_indices] for k, v in X_torch.items()}
+    y_train = y_torch[train_indices]
+    y_val = y_torch[val_indices]
 
-        # Configuration de l'entraînement
-        from torch.optim import AdamW
-        from torch.nn import CrossEntropyLoss
+    print(f"✅ Train: {len(train_indices)} échantillons")
+    print(f"✅ Validation: {len(val_indices)} échantillons")
 
-        optimizer = AdamW(model.parameters(), lr=3e-5, weight_decay=0.01)
-        criterion = CrossEntropyLoss()
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        model.to(device)
+    # 8. Configuration de l'entraînement
+    print("\n🎯 CONFIGURATION DE L'ENTRAÎNEMENT")
+    print("-" * 35)
+    
+    from torch.optim import AdamW
+    from torch.nn import CrossEntropyLoss
 
-        print(f"Device: {device}")
+    # XLNet bénéficie d'un learning rate plus faible
+    optimizer = AdamW(model.parameters(), lr=2e-5, weight_decay=0.01)
+    criterion = CrossEntropyLoss()
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model.to(device)
 
-        # Entraînement
-        num_epochs = 12
-        batch_size = 16  # Batch size plus petit pour XLNet
+    print(f"✅ Device: {device}")
+    print(f"✅ Learning rate: 2e-5 (optimisé pour XLNet)")
+    print(f"✅ Optimiseur: AdamW avec weight_decay=0.01")
 
-        train_losses = []
-        val_losses = []
+    # 9. Entraînement du modèle XLNet
+    print("\n🚀 ENTRAÎNEMENT DU MODÈLE XLNET")
+    print("-" * 35)
+    
+    num_epochs = 15
+    batch_size = 8  # Batch size plus petit pour XLNet avec MLM
 
-        print(f"\nDébut entraînement: {num_epochs} époques, batch_size={batch_size}")
+    train_losses = []
+    val_losses = []
 
-        for epoch in range(num_epochs):
-            # Mode entraînement
-            model.train()
-            total_train_loss = 0
-            num_batches = 0
+    print(f"Paramètres d'entraînement:")
+    print(f"   Époques: {num_epochs}")
+    print(f"   Batch size: {batch_size}")
+    print(f"   Gradient clipping: 1.0")
+    print()
 
-            for i in range(0, len(train_indices), batch_size):
-                batch_indices = train_indices[i:i+batch_size]
-                
+    for epoch in range(num_epochs):
+        # Mode entraînement
+        model.train()
+        total_train_loss = 0
+        num_batches = 0
+        successful_batches = 0
+
+        for i in range(0, len(train_indices), batch_size):
+            batch_indices = train_indices[i:i+batch_size]
+            
+            try:
                 batch_X = {k: v[batch_indices].to(device) for k, v in X_train.items()}
                 batch_y = y_train[i:i+batch_size].to(device)
 
                 optimizer.zero_grad()
+                outputs = model(batch_X)
+                loss = criterion(outputs, batch_y)
+                loss.backward()
                 
-                try:
-                    outputs = model(batch_X)
-                    loss = criterion(outputs, batch_y)
-                    loss.backward()
-                    
-                    # Gradient clipping pour XLNet
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                    
-                    optimizer.step()
-                    total_train_loss += loss.item()
-                    num_batches += 1
-                    
-                except Exception as batch_error:
-                    print(f"Erreur batch {i}: {batch_error}")
-                    continue
-
-            # Mode évaluation
-            model.eval()
-            total_val_loss = 0
-            num_val_batches = 0
-
-            with torch.no_grad():
-                for i in range(0, len(val_indices), batch_size):
-                    batch_indices = val_indices[i:i+batch_size]
-                    
-                    batch_X = {k: v[batch_indices].to(device) for k, v in X_val.items()}
-                    batch_y = y_val[i:i+batch_size].to(device)
-
-                    try:
-                        outputs = model(batch_X)
-                        loss = criterion(outputs, batch_y)
-                        total_val_loss += loss.item()
-                        num_val_batches += 1
-                    except Exception as val_error:
-                        continue
-
-            if num_batches > 0 and num_val_batches > 0:
-                avg_train_loss = total_train_loss / num_batches
-                avg_val_loss = total_val_loss / num_val_batches
+                # Gradient clipping important pour XLNet
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 
-                train_losses.append(avg_train_loss)
-                val_losses.append(avg_val_loss)
+                optimizer.step()
                 
-                if (epoch + 1) % 3 == 0 or epoch == 0:
-                    print(f"Époque {epoch+1}: Train={avg_train_loss:.4f}, Val={avg_val_loss:.4f}")
+                total_train_loss += loss.item()
+                successful_batches += 1
+                
+            except Exception as batch_error:
+                print(f"   ⚠️ Erreur batch train {i//batch_size}: {batch_error}")
+                continue
+            
+            num_batches += 1
 
-        print("✅ Entraînement terminé!")
-
-        # Évaluation finale
+        # Mode évaluation
         model.eval()
-        correct = 0
-        total = 0
-        
+        total_val_loss = 0
+        num_val_batches = 0
+        successful_val_batches = 0
+
         with torch.no_grad():
             for i in range(0, len(val_indices), batch_size):
                 batch_indices = val_indices[i:i+batch_size]
+                
+                try:
+                    batch_X = {k: v[batch_indices].to(device) for k, v in X_val.items()}
+                    batch_y = y_val[i:i+batch_size].to(device)
+
+                    outputs = model(batch_X)
+                    loss = criterion(outputs, batch_y)
+                    
+                    total_val_loss += loss.item()
+                    successful_val_batches += 1
+                    
+                except Exception as val_error:
+                    continue
+                
+                num_val_batches += 1
+
+        # Calculer et afficher les résultats
+        if successful_batches > 0 and successful_val_batches > 0:
+            avg_train_loss = total_train_loss / successful_batches
+            avg_val_loss = total_val_loss / successful_val_batches
+            
+            train_losses.append(avg_train_loss)
+            val_losses.append(avg_val_loss)
+            
+            print(f"Époque {epoch+1:2d}/{num_epochs}: Train={avg_train_loss:.4f}, Val={avg_val_loss:.4f} "
+                  f"(✅{successful_batches}/{num_batches} batches)")
+        else:
+            print(f"Époque {epoch+1:2d}/{num_epochs}: ❌ Pas de batches réussis")
+
+    print("\n✅ Entraînement terminé!")
+
+    # 10. Évaluation finale
+    print("\n📊 ÉVALUATION FINALE")
+    print("-" * 20)
+    
+    model.eval()
+    correct = 0
+    total = 0
+    
+    with torch.no_grad():
+        for i in range(0, len(val_indices), batch_size):
+            batch_indices = val_indices[i:i+batch_size]
+            
+            try:
                 batch_X = {k: v[batch_indices].to(device) for k, v in X_val.items()}
                 batch_y = y_val[i:i+batch_size].to(device)
                 
-                try:
-                    outputs = model(batch_X)
-                    predictions = torch.argmax(outputs, dim=1)
-                    correct += (predictions == batch_y).sum().item()
-                    total += batch_y.size(0)
-                except:
-                    continue
-        
-        if total > 0:
-            accuracy = correct / total
-            print(f"Accuracy finale: {accuracy:.2%}")
-        else:
-            accuracy = 0.0
-            print("Impossible de calculer l'accuracy")
-
-        # Sauvegarder le modèle
-        torch.save({
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'schema': schema_dict,
-            'tabular_data_with_itemid': list(tabular_data_with_itemid.keys()),
-            'label_encoder': label_encoder,
-            'item_encoder': item_encoder,
-            'xlnet_config': xlnet_config_safe,
-            'train_losses': train_losses,
-            'val_losses': val_losses,
-            'final_accuracy': accuracy,
-            'model_type': 'xlnet_with_itemid'
-        }, 't4rec_xlnet_with_itemid.pth')
-
-        print("💾 Modèle sauvegardé: t4rec_xlnet_with_itemid.pth")
-        
+                outputs = model(batch_X)
+                predictions = torch.argmax(outputs, dim=1)
+                correct += (predictions == batch_y).sum().item()
+                total += batch_y.size(0)
+                
+            except Exception:
+                continue
+    
+    if total > 0:
+        accuracy = correct / total
+        print(f"✅ Accuracy finale: {accuracy:.2%}")
+        print(f"✅ Échantillons évalués: {total}/{len(val_indices)}")
     else:
-        # Fallback: modèle PyTorch simple
-        print("\n🔄 FALLBACK: MODÈLE PYTORCH SIMPLE")
-        print("-" * 40)
-        
-        class SimpleClassifier(torch.nn.Module):
-            def __init__(self, input_dim, n_classes):
-                super().__init__()
-                self.fc1 = torch.nn.Linear(input_dim, 256)
-                self.fc2 = torch.nn.Linear(256, 128)
-                self.fc3 = torch.nn.Linear(128, n_classes)
-                self.dropout = torch.nn.Dropout(0.3)
-                self.relu = torch.nn.ReLU()
-                
-            def forward(self, x):
-                if isinstance(x, dict):
-                    # Concaténer toutes les features
-                    features = []
-                    for value in x.values():
-                        if value.dim() > 2:
-                            value = value.mean(dim=1)
-                        if value.dim() == 1:
-                            value = value.unsqueeze(1)
-                        features.append(value.float())
-                    x = torch.cat(features, dim=1)
-                
-                x = self.relu(self.fc1(x))
-                x = self.dropout(x)
-                x = self.relu(self.fc2(x))
-                x = self.dropout(x)
-                return self.fc3(x)
-        
-        # Calculer la dimension d'entrée
-        sample_input = prepare_torch_data_with_itemid(tabular_data_with_itemid)
-        total_dim = 0
-        for key, value in sample_input.items():
-            if value.dim() > 1:
-                total_dim += value.shape[1] if value.dim() == 2 else 1
-            else:
-                total_dim += 1
-        
-        simple_model = SimpleClassifier(total_dim, len(np.unique(y)))
-        print(f"✅ Modèle PyTorch simple créé: {total_dim} -> {len(np.unique(y))} classes")
-        print(f"📈 Paramètres: {sum(p.numel() for p in simple_model.parameters()):,}")
+        accuracy = 0.0
+        print("❌ Impossible de calculer l'accuracy")
+
+    # 11. Résumé final
+    print(f"\n🎉 RÉSUMÉ DE L'ENTRAÎNEMENT")
+    print("-" * 30)
+    print(f"Architecture: XLNet avec MLM masking")
+    print(f"Features totales: {len(schema_dict['feature_specs'])}")
+    print(f"Item_id uniques: {len(np.unique(item_ids))}")
+    print(f"Séquences: {len(sequence_features)}")
+    print(f"Catégorielles: {len(categorical_features)}")
+    print(f"Époques: {num_epochs}")
+    print(f"Batch size: {batch_size}")
+    print(f"Learning rate: 2e-5")
+    print(f"Accuracy finale: {accuracy:.2%}")
+    
+    if train_losses:
+        print(f"Loss finale train: {train_losses[-1]:.4f}")
+        print(f"Loss finale val: {val_losses[-1]:.4f}")
+
+    # 12. Sauvegarder le modèle
+    print("\n💾 SAUVEGARDE DU MODÈLE")
+    print("-" * 25)
+    
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'schema': schema_dict,
+        'merlin_schema': schema,
+        'label_encoder': label_encoder,
+        'item_encoder': item_encoder,
+        'xlnet_config': xlnet_config,
+        'train_losses': train_losses,
+        'val_losses': val_losses,
+        'final_accuracy': accuracy,
+        'model_type': 'xlnet_mlm_with_itemid',
+        'feature_names': list(tabular_data_with_itemid.keys())
+    }, 't4rec_xlnet_final.pth')
+
+    print("✅ Modèle XLNet sauvegardé: t4rec_xlnet_final.pth")
+    print("✅ Entraînement terminé avec succès!")
 
 except Exception as e:
-    print(f"\n❌ ERREUR GÉNÉRALE: {e}")
+    print(f"\n❌ ERREUR: {e}")
     import traceback
     traceback.print_exc()
-    
-    print("\n💡 SOLUTIONS RECOMMANDÉES:")
-    print("1. L'item_id est maintenant inclus dans le schéma")
-    print("2. Le masking est désactivé pour éviter les erreurs")
-    print("3. Un modèle PyTorch simple est disponible en fallback")
-    print("4. Vérifiez que vos données 'tabular_data' et 'df' sont bien définies")
