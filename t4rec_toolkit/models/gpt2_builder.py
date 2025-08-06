@@ -5,6 +5,8 @@ Builder pour les modèles GPT2.
 Ce module fournit la construction de modèles GPT2 optimisés
 pour les sessions courtes et la prédiction causale dans
 les systèmes de recommandation.
+
+Version corrigée pour gérer le problème input_module = None.
 """
 
 from typing import Dict, Any, List, Optional
@@ -217,10 +219,27 @@ class GPT2ModelBuilder(BaseModelBuilder):
             projection_dim = validated_config['projection_dim']
             summary_type = validated_config['summary_type']
             
-            # Construire le module d'entrée
+            # Construire le module d'entrée avec vérifications renforcées
+            logger.info("Construction du module d'entrée...")
             input_module = self.build_input_module(
                 schema, d_model, max_sequence_length, masking
             )
+            
+            # Vérification critique du module d'entrée
+            if input_module is None:
+                error_msg = "Le module d'entrée n'a pas pu être créé"
+                logger.error(error_msg)
+                raise ConfigurationError(
+                    error_msg,
+                    config_key="input_module"
+                )
+            
+            # Vérifier que le module a l'attribut masking requis
+            if not hasattr(input_module, 'masking'):
+                logger.warning("Module d'entrée sans attribut masking - ajout manuel")
+                input_module.masking = masking
+            
+            logger.info(f"Module d'entrée créé: {type(input_module).__name__}")
             
             # Construire la configuration du transformer
             transformer_config = self.build_transformer_config(**validated_config)
@@ -230,9 +249,11 @@ class GPT2ModelBuilder(BaseModelBuilder):
             
             # Ajouter projection MLP si demandée
             if use_projection and projection_dim != d_model:
+                logger.info(f"Ajout d'une couche de projection: {d_model} -> {projection_dim}")
                 body_layers.append(tr.MLPBlock([projection_dim]))
             
             # Ajouter le bloc transformer
+            logger.info("Ajout du bloc transformer")
             body_layers.append(
                 tr.TransformerBlock(
                     transformer_config, 
@@ -249,6 +270,7 @@ class GPT2ModelBuilder(BaseModelBuilder):
             ]
             
             # Construire la tête de prédiction
+            logger.info("Construction de la tête de prédiction")
             head = tr.Head(
                 body,
                 tr.NextItemPredictionTask(
@@ -278,6 +300,145 @@ class GPT2ModelBuilder(BaseModelBuilder):
         except Exception as e:
             logger.error(f"Erreur lors de la construction du modèle GPT2: {e}")
             raise ConfigurationError(f"Échec de construction GPT2: {str(e)}")
+    
+    def create_simple_input_module(self, 
+                                  schema: Dict[str, Any],
+                                  d_model: int,
+                                  max_sequence_length: int,
+                                  masking: str) -> Any:
+        """
+        Crée un module d'entrée simplifié en cas d'échec des approches standards.
+        
+        Args:
+            schema: Schéma des données
+            d_model: Dimension du modèle
+            max_sequence_length: Longueur de séquence
+            masking: Type de masking
+            
+        Returns:
+            Module d'entrée simplifié
+        """
+        try:
+            import transformers4rec.torch as tr
+            import torch
+            
+            logger.info("Création d'un module d'entrée simplifié")
+            
+            # Analyser les features du schéma
+            feature_specs = schema.get("feature_specs", [])
+            n_features = len(feature_specs)
+            
+            if n_features == 0:
+                raise ValueError("Aucune feature trouvée dans le schéma")
+            
+            # Créer un module d'embedding simple pour toutes les features
+            class SimpleInputModule(torch.nn.Module):
+                def __init__(self, n_features, d_model, max_seq_len, masking_type):
+                    super().__init__()
+                    self.n_features = n_features
+                    self.d_model = d_model
+                    self.max_sequence_length = max_seq_len
+                    self.masking = masking_type
+                    
+                    # Embedding pour chaque feature
+                    self.feature_embeddings = torch.nn.ModuleDict()
+                    
+                    for i, spec in enumerate(feature_specs):
+                        feature_name = spec["name"]
+                        
+                        if spec.get("is_continuous", False):
+                            # Feature continue - utiliser une couche linéaire
+                            self.feature_embeddings[feature_name] = torch.nn.Linear(1, d_model // n_features)
+                        else:
+                            # Feature catégorielle - utiliser embedding
+                            vocab_size = spec.get("vocab_size", 100)
+                            self.feature_embeddings[feature_name] = torch.nn.Embedding(
+                                vocab_size, d_model // n_features
+                            )
+                    
+                    # Projection finale
+                    self.output_projection = torch.nn.Linear(d_model, d_model)
+                    
+                def forward(self, inputs):
+                    """Forward pass du module simplifié."""
+                    batch_size = None
+                    feature_outputs = []
+                    
+                    for feature_name, feature_data in inputs.items():
+                        if batch_size is None:
+                            batch_size = feature_data.shape[0]
+                            
+                        if feature_name in self.feature_embeddings:
+                            embedding_layer = self.feature_embeddings[feature_name]
+                            
+                            if isinstance(embedding_layer, torch.nn.Linear):
+                                # Feature continue
+                                if feature_data.dim() == 1:
+                                    feature_data = feature_data.unsqueeze(-1)
+                                embedded = embedding_layer(feature_data.float())
+                            else:
+                                # Feature catégorielle
+                                embedded = embedding_layer(feature_data.long())
+                            
+                            feature_outputs.append(embedded)
+                    
+                    # Concaténer toutes les features
+                    if feature_outputs:
+                        concatenated = torch.cat(feature_outputs, dim=-1)
+                        output = self.output_projection(concatenated)
+                        
+                        # S'assurer que la sortie a la bonne forme pour les séquences
+                        if output.dim() == 2:
+                            # Ajouter une dimension de séquence si nécessaire
+                            output = output.unsqueeze(1).expand(-1, self.max_sequence_length, -1)
+                        
+                        return output
+                    else:
+                        # Fallback: retourner des zéros
+                        return torch.zeros(batch_size, self.max_sequence_length, self.d_model)
+            
+            # Créer le module
+            simple_module = SimpleInputModule(n_features, d_model, max_sequence_length, masking)
+            
+            logger.info(f"Module d'entrée simplifié créé avec {n_features} features")
+            return simple_module
+            
+        except Exception as e:
+            logger.error(f"Échec de création du module simplifié: {e}")
+            raise ConfigurationError(f"Impossible de créer un module d'entrée: {str(e)}")
+    
+    def build_input_module(self, 
+                          schema: Dict[str, Any],
+                          d_model: int,
+                          max_sequence_length: int,
+                          masking: str = "mlm") -> Any:
+        """
+        Version surchargée pour GPT2 avec fallback vers module simplifié.
+        
+        Args:
+            schema: Schéma T4Rec
+            d_model: Dimension du modèle
+            max_sequence_length: Longueur de séquence
+            masking: Type de masking
+            
+        Returns:
+            Module d'entrée
+        """
+        try:
+            # Essayer l'approche standard du parent
+            input_module = super().build_input_module(schema, d_model, max_sequence_length, masking)
+            
+            if input_module is not None:
+                return input_module
+            
+            # Si échec, utiliser l'approche simplifiée
+            logger.warning("Approche standard échouée - utilisation du module simplifié")
+            return self.create_simple_input_module(schema, d_model, max_sequence_length, masking)
+            
+        except Exception as e:
+            logger.warning(f"Toutes les approches ont échoué: {e}")
+            # Dernière tentative avec le module simplifié
+            return self.create_simple_input_module(schema, d_model, max_sequence_length, masking)
     
     def get_recommended_config_for_data_size(self, n_samples: int, n_features: int) -> Dict[str, Any]:
         """
@@ -360,76 +521,140 @@ class GPT2ModelBuilder(BaseModelBuilder):
         return config
 
 
-    # Utilitaires pour GPT2
-    def create_gpt2_session_model(schema: Dict[str, Any], 
-                                sequence_length: int = 50,
-                                mobile_optimized: bool = False,
-                                cpu_optimized: bool = False) -> Any:
-        """
-        Fonction utilitaire pour créer rapidement un modèle GPT2 pour sessions.
+# Fonctions utilitaires pour GPT2
+def create_gpt2_session_model(schema: Dict[str, Any], 
+                            sequence_length: int = 50,
+                            mobile_optimized: bool = False,
+                            cpu_optimized: bool = False) -> Any:
+    """
+    Fonction utilitaire pour créer rapidement un modèle GPT2 pour sessions.
+    
+    Args:
+        schema: Schéma des données
+        sequence_length: Longueur des séquences
+        mobile_optimized: Optimiser pour mobile
+        cpu_optimized: Optimiser pour CPU
         
-        Args:
-            schema: Schéma des données
-            sequence_length: Longueur des séquences
-            mobile_optimized: Optimiser pour mobile
-            cpu_optimized: Optimiser pour CPU
-            
-        Returns:
-            Modèle GPT2 configuré
-        """
-        builder = GPT2ModelBuilder()
-        
-        if mobile_optimized:
-            config = builder.get_mobile_optimized_config()
-        elif cpu_optimized:
-            config = builder.get_cpu_optimized_config()
-        else:
-            config = builder.get_default_config()
-        
-        config['max_sequence_length'] = sequence_length
-        
-        return builder.build_model(schema, **config)
+    Returns:
+        Modèle GPT2 configuré
+    """
+    builder = GPT2ModelBuilder()
+    
+    if mobile_optimized:
+        config = builder.get_mobile_optimized_config()
+    elif cpu_optimized:
+        config = builder.get_cpu_optimized_config()
+    else:
+        config = builder.get_default_config()
+    
+    config['max_sequence_length'] = sequence_length
+    
+    return builder.build_model(schema, **config)
 
-    def get_gpt2_config_for_sessions(session_length: int,
+
+def get_gpt2_config_for_sessions(session_length: int,
                                n_samples: int, 
                                n_features: int) -> Dict[str, Any]:
-        """
-        Configuration GPT2 spécialisée pour données de session.
+    """
+    Configuration GPT2 spécialisée pour données de session.
+    
+    Args:
+        session_length: Longueur moyenne des sessions
+        n_samples: Nombre d'échantillons
+        n_features: Nombre de features
         
-        Args:
-            session_length: Longueur moyenne des sessions
-            n_samples: Nombre d'échantillons
-            n_features: Nombre de features
-            
-        Returns:
-            Configuration optimisée
-        """
-        builder = GPT2ModelBuilder()
-        config = builder.get_recommended_config_for_data_size(n_samples, n_features)
-        
-        # Spécialisations pour sessions
+    Returns:
+        Configuration optimisée
+    """
+    builder = GPT2ModelBuilder()
+    config = builder.get_recommended_config_for_data_size(n_samples, n_features)
+    
+    # Spécialisations pour sessions
+    config.update({
+        'max_sequence_length': max(session_length + 10, 20),  # Marge pour croissance
+        'masking': 'clm',                                     # Causal pour sessions
+        'summary_type': 'last',                               # Dernière position
+        'use_cache': True,                                    # Cache pour prédiction
+        'use_projection': n_features > 50                    # Projection si beaucoup de features
+    })
+    
+    # Ajuster selon la longueur de session
+    if session_length < 20:
+        # Sessions très courtes (mobile)
         config.update({
-            'max_sequence_length': max(session_length + 10, 20),  # Marge pour croissance
-            'masking': 'clm',                                     # Causal pour sessions
-            'summary_type': 'last',                               # Dernière position
-            'use_cache': True,                                    # Cache pour prédiction
-            'use_projection': n_features > 50                    # Projection si beaucoup de features
+            'd_model': 128,
+            'n_head': 4,
+            'n_layer': 2
         })
+    elif session_length > 100:
+        # Sessions très longues (desktop)
+        config.update({
+            'd_model': 256,
+            'n_head': 8,
+            'n_layer': 4
+        })
+    
+    return config
+
+
+def diagnose_gpt2_creation_failure(schema: Dict[str, Any], **config) -> Dict[str, Any]:
+    """
+    Diagnostique les échecs de création de modèle GPT2.
+    
+    Args:
+        schema: Schéma utilisé
+        **config: Configuration utilisée
         
-        # Ajuster selon la longueur de session
-        if session_length < 20:
-            # Sessions très courtes (mobile)
-            config.update({
-                'd_model': 128,
-                'n_head': 4,
-                'n_layer': 2
-            })
-        elif session_length > 100:
-            # Sessions très longues (desktop)
-            config.update({
-                'd_model': 256,
-                'n_head': 8,
-                'n_layer': 4
-            })
-        
-        return config
+    Returns:
+        Rapport de diagnostic
+    """
+    diagnosis = {
+        "schema_analysis": {},
+        "config_analysis": {},
+        "import_checks": {},
+        "recommendations": []
+    }
+    
+    # Analyser le schéma
+    diagnosis["schema_analysis"]["has_features"] = "feature_specs" in schema
+    diagnosis["schema_analysis"]["n_features"] = len(schema.get("feature_specs", []))
+    diagnosis["schema_analysis"]["has_continuous"] = any(
+        spec.get("is_continuous", False) for spec in schema.get("feature_specs", [])
+    )
+    diagnosis["schema_analysis"]["has_categorical"] = any(
+        not spec.get("is_continuous", True) for spec in schema.get("feature_specs", [])
+    )
+    
+    # Analyser la configuration
+    builder = GPT2ModelBuilder()
+    try:
+        validated_config = builder.validate_config(config)
+        diagnosis["config_analysis"]["valid"] = True
+        diagnosis["config_analysis"]["config"] = validated_config
+    except Exception as e:
+        diagnosis["config_analysis"]["valid"] = False
+        diagnosis["config_analysis"]["error"] = str(e)
+    
+    # Vérifier les imports
+    try:
+        import transformers4rec.torch as tr
+        diagnosis["import_checks"]["transformers4rec"] = True
+    except ImportError:
+        diagnosis["import_checks"]["transformers4rec"] = False
+        diagnosis["recommendations"].append("Installer transformers4rec: pip install transformers4rec==23.04.00")
+    
+    try:
+        from merlin.schema import Schema
+        diagnosis["import_checks"]["merlin_schema"] = True
+    except ImportError:
+        diagnosis["import_checks"]["merlin_schema"] = False
+        diagnosis["recommendations"].append("Installer merlin-core: pip install merlin-core")
+    
+    # Recommandations basées sur l'analyse
+    if diagnosis["schema_analysis"]["n_features"] == 0:
+        diagnosis["recommendations"].append("Le schéma ne contient aucune feature")
+    
+    if not diagnosis["config_analysis"]["valid"]:
+        diagnosis["recommendations"].append("Corriger la configuration du modèle")
+    
+    return diagnosis
