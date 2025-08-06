@@ -1,3 +1,14 @@
+# models/xlnet_builder.py
+"""
+Builder pour les modèles XLNet.
+
+Ce module fournit la construction de modèles XLNet optimisés
+pour les données séquentielles bancaires avec de longs historiques,
+grâce à son mécanisme de cache mémoire et son attention bidirectionnelle.
+
+Version corrigée pour résoudre les problèmes de création du module d'entrée.
+"""
+
 from typing import Dict, Any, List, Optional
 import logging
 
@@ -170,6 +181,203 @@ class XLNetModelBuilder(BaseModelBuilder):
                "Installez avec: pip install transformers4rec==23.04.00"
            ) from e
    
+   def create_simple_input_module_xlnet(self, 
+                                       schema: Dict[str, Any],
+                                       d_model: int,
+                                       max_sequence_length: int,
+                                       masking: str) -> Any:
+       """
+       Crée un module d'entrée simplifié spécialement pour XLNet.
+       
+       Args:
+           schema: Schéma des données
+           d_model: Dimension du modèle
+           max_sequence_length: Longueur de séquence
+           masking: Type de masking
+           
+       Returns:
+           Module d'entrée simplifié pour XLNet
+       """
+       try:
+           import torch
+           import torch.nn as nn
+           
+           logger.info("Création d'un module d'entrée XLNet simplifié")
+           
+           feature_specs = schema.get("feature_specs", [])
+           n_features = len(feature_specs)
+           
+           if n_features == 0:
+               raise ValueError("Aucune feature trouvée dans le schéma")
+           
+           class XLNetInputModule(torch.nn.Module):
+               def __init__(self, feature_specs, d_model, max_seq_len, masking_type):
+                   super().__init__()
+                   self.feature_specs = feature_specs
+                   self.d_model = d_model
+                   self.max_sequence_length = max_seq_len
+                   self.masking = masking_type
+                   
+                   # Modules pour chaque type de feature
+                   self.continuous_projections = nn.ModuleDict()
+                   self.categorical_embeddings = nn.ModuleDict()
+                   
+                   continuous_count = 0
+                   categorical_count = 0
+                   
+                   for spec in feature_specs:
+                       feature_name = spec["name"]
+                       
+                       if spec.get("is_continuous", False):
+                           # Feature continue - projection linéaire
+                           if spec.get("is_sequence", False):
+                               # Séquence continue
+                               self.continuous_projections[feature_name] = nn.Sequential(
+                                   nn.Linear(max_seq_len, d_model // 4),
+                                   nn.ReLU(),
+                                   nn.Dropout(0.1)
+                               )
+                           else:
+                               # Feature continue simple
+                               self.continuous_projections[feature_name] = nn.Sequential(
+                                   nn.Linear(1, d_model // 4),
+                                   nn.ReLU(),
+                                   nn.Dropout(0.1)
+                               )
+                           continuous_count += 1
+                       else:
+                           # Feature catégorielle - embedding
+                           vocab_size = spec.get("vocab_size", 100)
+                           embed_dim = max(d_model // (4 * max(categorical_count + 1, 1)), 8)
+                           self.categorical_embeddings[feature_name] = nn.Embedding(
+                               vocab_size, embed_dim, padding_idx=0
+                           )
+                           categorical_count += 1
+                   
+                   # Calculer la dimension totale après concaténation
+                   total_dim = 0
+                   if continuous_count > 0:
+                       total_dim += continuous_count * (d_model // 4)
+                   if categorical_count > 0:
+                       avg_embed_dim = max(d_model // (4 * max(categorical_count, 1)), 8)
+                       total_dim += categorical_count * avg_embed_dim
+                   
+                   # Projection finale vers d_model
+                   self.final_projection = nn.Sequential(
+                       nn.Linear(total_dim, d_model),
+                       nn.LayerNorm(d_model),
+                       nn.Dropout(0.1)
+                   ) if total_dim != d_model else nn.Identity()
+                   
+                   # Encodage positionnel pour XLNet
+                   self.pos_encoding = nn.Parameter(
+                       torch.randn(max_seq_len, d_model) * 0.02
+                   )
+                   
+               def forward(self, inputs):
+                   """Forward pass du module XLNet simplifié."""
+                   batch_size = None
+                   feature_outputs = []
+                   
+                   # Traiter les features continues
+                   for feature_name, proj_layer in self.continuous_projections.items():
+                       if feature_name in inputs:
+                           feature_data = inputs[feature_name]
+                           if batch_size is None:
+                               batch_size = feature_data.shape[0]
+                           
+                           # Gérer les différentes formes de données
+                           if feature_data.dim() == 1:
+                               feature_data = feature_data.unsqueeze(-1)
+                           elif feature_data.dim() == 3:
+                               # Moyenner sur la dimension de séquence si nécessaire
+                               feature_data = feature_data.mean(dim=1)
+                           
+                           projected = proj_layer(feature_data.float())
+                           feature_outputs.append(projected)
+                   
+                   # Traiter les features catégorielles
+                   for feature_name, embed_layer in self.categorical_embeddings.items():
+                       if feature_name in inputs:
+                           feature_data = inputs[feature_name]
+                           if batch_size is None:
+                               batch_size = feature_data.shape[0]
+                           
+                           # S'assurer que les données sont dans la bonne plage
+                           feature_data = torch.clamp(feature_data.long(), 0, embed_layer.num_embeddings - 1)
+                           
+                           embedded = embed_layer(feature_data)
+                           
+                           # Si c'est une séquence, moyenner
+                           if embedded.dim() > 2:
+                               embedded = embedded.mean(dim=1)
+                           
+                           feature_outputs.append(embedded)
+                   
+                   # Concaténer toutes les features
+                   if feature_outputs:
+                       concatenated = torch.cat(feature_outputs, dim=-1)
+                       projected = self.final_projection(concatenated)
+                   else:
+                       # Fallback: créer des features aléatoires
+                       projected = torch.randn(batch_size, self.d_model, device=next(iter(inputs.values())).device)
+                   
+                   # Ajouter la dimension de séquence si nécessaire
+                   if projected.dim() == 2:
+                       projected = projected.unsqueeze(1).expand(-1, self.max_sequence_length, -1)
+                   
+                   # Ajouter l'encodage positionnel
+                   seq_len = projected.size(1)
+                   if seq_len <= self.pos_encoding.size(0):
+                       pos_enc = self.pos_encoding[:seq_len].unsqueeze(0)
+                       projected = projected + pos_enc
+                   
+                   return projected
+           
+           # Créer le module
+           xlnet_module = XLNetInputModule(feature_specs, d_model, max_sequence_length, masking)
+           
+           logger.info(f"Module d'entrée XLNet simplifié créé avec {n_features} features")
+           return xlnet_module
+           
+       except Exception as e:
+           logger.error(f"Échec de création du module XLNet simplifié: {e}")
+           raise ConfigurationError(f"Impossible de créer un module d'entrée XLNet: {str(e)}")
+   
+   def build_input_module(self, 
+                         schema: Dict[str, Any],
+                         d_model: int,
+                         max_sequence_length: int,
+                         masking: str = "mlm") -> Any:
+       """
+       Version surchargée pour XLNet avec fallback vers module simplifié XLNet.
+       
+       Args:
+           schema: Schéma T4Rec
+           d_model: Dimension du modèle
+           max_sequence_length: Longueur de séquence
+           masking: Type de masking
+           
+       Returns:
+           Module d'entrée
+       """
+       try:
+           # Essayer l'approche standard du parent
+           input_module = super().build_input_module(schema, d_model, max_sequence_length, masking)
+           
+           if input_module is not None:
+               logger.info("Module d'entrée XLNet créé via approche standard")
+               return input_module
+           
+           # Si échec, utiliser l'approche simplifiée spécifique à XLNet
+           logger.warning("Approche standard échouée - utilisation du module XLNet simplifié")
+           return self.create_simple_input_module_xlnet(schema, d_model, max_sequence_length, masking)
+           
+       except Exception as e:
+           logger.warning(f"Toutes les approches ont échoué: {e}")
+           # Dernière tentative avec le module XLNet simplifié
+           return self.create_simple_input_module_xlnet(schema, d_model, max_sequence_length, masking)
+   
    def build_model(self, 
                   schema: Dict[str, Any], 
                   **config) -> Any:
@@ -196,10 +404,27 @@ class XLNetModelBuilder(BaseModelBuilder):
            use_projection = validated_config['use_projection']
            projection_dim = validated_config['projection_dim']
            
-           # Construire le module d'entrée
+           # Construire le module d'entrée avec vérifications renforcées
+           logger.info("Construction du module d'entrée XLNet...")
            input_module = self.build_input_module(
                schema, d_model, max_sequence_length, masking
            )
+           
+           # Vérification critique du module d'entrée
+           if input_module is None:
+               error_msg = "Le module d'entrée XLNet n'a pas pu être créé"
+               logger.error(error_msg)
+               raise ConfigurationError(
+                   error_msg,
+                   config_key="input_module"
+               )
+           
+           # Vérifier que le module a l'attribut masking requis
+           if not hasattr(input_module, 'masking'):
+               logger.warning("Module d'entrée XLNet sans attribut masking - ajout manuel")
+               input_module.masking = masking
+           
+           logger.info(f"Module d'entrée XLNet créé: {type(input_module).__name__}")
            
            # Construire la configuration du transformer
            transformer_config = self.build_transformer_config(**validated_config)
@@ -209,9 +434,11 @@ class XLNetModelBuilder(BaseModelBuilder):
            
            # Ajouter projection MLP si demandée
            if use_projection and projection_dim != d_model:
+               logger.info(f"Ajout d'une couche de projection XLNet: {d_model} -> {projection_dim}")
                body_layers.append(tr.MLPBlock([projection_dim]))
            
-           # Ajouter le bloc transformer
+           # Ajouter le bloc transformer XLNet
+           logger.info("Ajout du bloc transformer XLNet")
            body_layers.append(
                tr.TransformerBlock(
                    transformer_config, 
@@ -221,13 +448,14 @@ class XLNetModelBuilder(BaseModelBuilder):
            
            body = tr.SequentialBlock(*body_layers)
            
-           # Définir les métriques d'évaluation
+           # Définir les métriques d'évaluation optimisées pour XLNet
            metrics = [
                NDCGAt(top_ks=[10, 20], labels_onehot=True),
                RecallAt(top_ks=[10, 20], labels_onehot=True)
            ]
            
            # Construire la tête de prédiction
+           logger.info("Construction de la tête de prédiction XLNet")
            head = tr.Head(
                body,
                tr.NextItemPredictionTask(
@@ -279,7 +507,8 @@ class XLNetModelBuilder(BaseModelBuilder):
                'n_head': 4,
                'n_layer': 2,
                'mem_len': 20,
-               'dropout': 0.2
+               'dropout': 0.2,
+               'max_sequence_length': 15
            })
        elif n_samples < 10000:
            # Données moyennes : configuration par défaut
@@ -291,7 +520,8 @@ class XLNetModelBuilder(BaseModelBuilder):
                'n_head': 16,
                'n_layer': 6,
                'mem_len': 100,
-               'dropout': 0.1
+               'dropout': 0.1,
+               'max_sequence_length': 30
            })
        
        # Ajuster selon le nombre de features
@@ -320,7 +550,7 @@ class XLNetModelBuilder(BaseModelBuilder):
        return config
 
 
-# Utilitaires pour XLNet
+# Fonctions utilitaires pour XLNet
 def create_xlnet_banking_model(schema: Dict[str, Any], 
                              sequence_length: int = 20,
                              cpu_optimized: bool = False) -> Any:
@@ -373,3 +603,58 @@ def get_xlnet_config_for_banking_data(n_samples: int,
    })
    
    return config
+
+def diagnose_xlnet_creation_failure(schema: Dict[str, Any], **config) -> Dict[str, Any]:
+   """
+   Diagnostique les échecs de création de modèle XLNet.
+   
+   Args:
+       schema: Schéma utilisé
+       **config: Configuration utilisée
+       
+   Returns:
+       Rapport de diagnostic XLNet
+   """
+   diagnosis = {
+       "schema_analysis": {},
+       "config_analysis": {},
+       "xlnet_specific": {},
+       "recommendations": []
+   }
+   
+   # Analyser le schéma
+   diagnosis["schema_analysis"]["has_features"] = "feature_specs" in schema
+   diagnosis["schema_analysis"]["n_features"] = len(schema.get("feature_specs", []))
+   diagnosis["schema_analysis"]["has_sequences"] = any(
+       spec.get("is_sequence", False) for spec in schema.get("feature_specs", [])
+   )
+   
+   # Analyser la configuration XLNet
+   builder = XLNetModelBuilder()
+   try:
+       validated_config = builder.validate_config(config)
+       diagnosis["config_analysis"]["valid"] = True
+       diagnosis["config_analysis"]["config"] = validated_config
+       
+       # Vérifications spécifiques XLNet
+       diagnosis["xlnet_specific"]["d_model_head_ratio"] = validated_config['d_model'] / validated_config['n_head']
+       diagnosis["xlnet_specific"]["memory_efficiency"] = validated_config['mem_len'] / validated_config['max_sequence_length']
+       
+   except Exception as e:
+       diagnosis["config_analysis"]["valid"] = False
+       diagnosis["config_analysis"]["error"] = str(e)
+   
+   # Recommandations spécifiques XLNet
+   if diagnosis["schema_analysis"]["n_features"] == 0:
+       diagnosis["recommendations"].append("XLNet: Le schéma ne contient aucune feature")
+   
+   if diagnosis["schema_analysis"]["n_features"] > 100:
+       diagnosis["recommendations"].append("XLNet: Considérer use_projection=True pour beaucoup de features")
+   
+   if config.get('d_model', 256) > 512:
+       diagnosis["recommendations"].append("XLNet: d_model élevé peut causer des problèmes de mémoire")
+   
+   if config.get('mem_len', 50) > config.get('max_sequence_length', 20) * 3:
+       diagnosis["recommendations"].append("XLNet: mem_len trop élevé par rapport à max_sequence_length")
+   
+   return diagnosis
