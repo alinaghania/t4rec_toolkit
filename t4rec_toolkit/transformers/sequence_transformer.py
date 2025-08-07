@@ -83,11 +83,11 @@ class SequenceTransformer(BaseTransformer):
         numeric_ratio = (~numeric_series.isna()).mean()
 
         # Statistiques si numérique
-        stats = {}
+        column_stats = {}
         if numeric_ratio > 0:
             valid_values = numeric_series.dropna()
             if len(valid_values) > 0:
-                stats.update(
+                column_stats.update(
                     {
                         "mean": valid_values.mean(),
                         "std": valid_values.std(),
@@ -155,7 +155,7 @@ class SequenceTransformer(BaseTransformer):
             quality_level=quality,
             recommendations=recommendations,
             warnings=warnings,
-            stats=stats,
+            stats=column_stats,
         )
 
     def _suggest_parameters(
@@ -315,3 +315,4 @@ class SequenceTransformer(BaseTransformer):
                 for name, analysis in self.column_analyses.items()
             },
         }
+
