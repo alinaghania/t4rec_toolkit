@@ -221,37 +221,43 @@ try:
                 input_size=(CONFIG["batch_size"], CONFIG["max_sequence_length"])
             )
 
-    # Corps du modèle simplifié pour T4Rec 23.04.00
+    # Approche simplifiée pour T4Rec 23.04.00
+    print("🔧 Construction du transformer...")
     transformer_body = tr.TransformerBlock(xlnet_config, masking=input_module.masking)
 
-    # Corps séquentiel avec dimensions explicites
-    body = tr.SequentialBlock(
-        input_module,
-        transformer_body,
-        tr.MLPBlock([CONFIG["d_model"]]),  # Projection de sortie obligatoire
-        output_size=torch.Size(
-            [CONFIG["batch_size"], CONFIG["max_sequence_length"], CONFIG["d_model"]]
-        ),
-    )
+    # Utiliser le pattern recommandé pour T4Rec 23.04.00
+    print("🔧 Construction du head...")
 
     # Métriques compatibles T4Rec 23.04.00
     from transformers4rec.torch.ranking_metric import NDCGAt, RecallAt
 
-    # Head avec NextItemPredictionTask SANS hf_format pour 23.04.00
-    head = tr.Head(
-        body,
-        tr.NextItemPredictionTask(
-            weight_tying=True,
-            metrics=[
-                NDCGAt(top_ks=[5, 10], labels_onehot=True),
-                RecallAt(top_ks=[5, 10], labels_onehot=True),
-            ],
-        ),
-        inputs=input_module,
+    # Créer la tâche de prédiction
+    prediction_task = tr.NextItemPredictionTask(
+        weight_tying=True,
+        metrics=[
+            NDCGAt(top_ks=[5, 10], labels_onehot=True),
+            RecallAt(top_ks=[5, 10], labels_onehot=True),
+        ],
     )
 
-    # Modèle final
-    model = tr.Model(head)
+    # Construire le modèle avec la méthode recommandée pour T4Rec 23.04.00
+    print("🔧 Assemblage final...")
+    try:
+        # Utiliser la méthode to_torch_model de XLNetConfig
+        model = xlnet_config.to_torch_model(input_module, prediction_task)
+        print("✅ Modèle créé avec xlnet_config.to_torch_model!")
+
+    except Exception as config_error:
+        print(f"⚠️ Erreur avec to_torch_model: {config_error}")
+
+        # Fallback: construction manuelle simplifiée
+        print("🔧 Fallback: construction manuelle...")
+
+        # Corps simplifié sans SequentialBlock problématique
+        head = tr.Head(transformer_body, prediction_task, inputs=input_module)
+
+        model = tr.Model(head)
+        print("✅ Modèle créé avec fallback!")
 
     print("\n🎉 MODÈLE T4REC CONSTRUIT AVEC SUCCÈS!")
     print(f"📊 Modèle: {type(model).__name__}")
