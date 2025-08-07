@@ -169,7 +169,7 @@ try:
     input_module = tr.TabularSequenceFeatures.from_schema(
         schema,
         max_sequence_length=CONFIG["max_sequence_length"],
-        continuous_projection=CONFIG["d_model"],
+        # Supprimer continuous_projection car nous n'avons que des features catégorielles
         aggregation="concat",
         masking="causal",
     )
@@ -178,7 +178,13 @@ try:
 
     # 4. Assignation du masking
     print("\n🎭 Configuration du masking...")
-    masking_module = tr.MaskSequence(hidden_size=CONFIG["d_model"], padding_idx=0)
+
+    # Import correct pour T4Rec 23.04.00
+    from transformers4rec.torch.masking import CausalLanguageModeling
+
+    masking_module = CausalLanguageModeling(
+        hidden_size=CONFIG["d_model"], padding_idx=0
+    )
     input_module.masking = masking_module
     print("✅ Masking assigné")
 
@@ -282,5 +288,3 @@ except Exception as e:
     import traceback
 
     traceback.print_exc()
-
-
