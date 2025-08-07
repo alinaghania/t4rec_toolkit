@@ -327,14 +327,14 @@ logger.info("Transformation des features séquentielles...")
 with tqdm(total=1, desc="🔄 Transform séquentielles") as pbar:
     seq_result = seq_transformer.fit_transform(df_processed, CONFIG["sequence_cols"])
     pbar.update(1)
-logger.info(f"Séquentielles transformées: {len(seq_result)} features")
+logger.info(f"Séquentielles transformées: {len(seq_result.data)} features")
 
 # Transformer catégorielles
 logger.info("Transformation des features catégorielles...")
 with tqdm(total=1, desc="🔄 Transform catégorielles") as pbar:
     cat_result = cat_transformer.fit_transform(df_processed, CONFIG["categorical_cols"])
     pbar.update(1)
-logger.info(f"Catégorielles transformées: {len(cat_result)} features")
+logger.info(f"Catégorielles transformées: {len(cat_result.data)} features")
 
 # Préparer target
 target_data = df_processed[CONFIG["target_col"]].values
@@ -423,7 +423,10 @@ print("\n🏋️ 7. PRÉPARATION ENTRAÎNEMENT...")
 # Créer sequences d'entraînement
 def create_training_sequences(seq_data, cat_data, target_data, config):
     """Créer séquences optimisées pour l'entraînement"""
-    n_samples = min(len(seq_data), len(cat_data), len(target_data))
+    # Obtenir le nombre d'échantillons à partir des données transformées
+    seq_sample_count = len(list(seq_data.data.values())[0]) if seq_data.data else 0
+    cat_sample_count = len(list(cat_data.data.values())[0]) if cat_data.data else 0
+    n_samples = min(seq_sample_count, cat_sample_count, len(target_data))
     seq_len = config["max_sequence_length"]
 
     # Prendre des échantillons équilibrés
@@ -437,14 +440,14 @@ def create_training_sequences(seq_data, cat_data, target_data, config):
     for idx in indices:
         # Créer séquence à partir des features transformées
         seq_values = []
-        for col_data in seq_data.values():
+        for col_data in seq_data.data.values():
             if isinstance(col_data, np.ndarray) and len(col_data) > idx:
                 seq_values.extend(
                     col_data[idx][: seq_len // 2]
                 )  # Prendre première moitié
 
         cat_values = []
-        for col_data in cat_data.values():
+        for col_data in cat_data.data.values():
             if isinstance(col_data, np.ndarray) and len(col_data) > idx:
                 cat_values.extend(
                     col_data[idx][: seq_len // 2]
@@ -663,7 +666,7 @@ print("\n💾 10. SAUVEGARDE RÉSULTATS...")
 
 # Préparer features transformées pour output
 features_output = []
-for i, (seq_name, seq_data) in enumerate(seq_result.items()):
+for i, (seq_name, seq_data) in enumerate(seq_result.data.items()):
     if isinstance(seq_data, np.ndarray):
         for j, values in enumerate(seq_data[:1000]):  # Limiter pour output
             features_output.append(
