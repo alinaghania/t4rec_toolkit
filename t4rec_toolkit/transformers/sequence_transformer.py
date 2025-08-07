@@ -126,11 +126,11 @@ class SequenceTransformer(BaseTransformer):
             )
 
         # Recommandations sur la configuration
-        if stats and "std" in stats:
-            if stats["std"] == 0:
+        if column_stats and "std" in column_stats:
+            if column_stats["std"] == 0:
                 warnings.append("Colonne constante")
                 recommendations.append("Considérer l'exclusion de cette colonne")
-            elif stats["std"] < 0.1:
+            elif column_stats["std"] < 0.1:
                 recommendations.append(
                     "Considérer une normalisation ou standardisation "
                     "due à la faible variance"
@@ -358,4 +358,5 @@ class SequenceTransformer(BaseTransformer):
                 continue
 
         return suitable_columns
+
 
