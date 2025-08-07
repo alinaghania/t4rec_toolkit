@@ -103,15 +103,48 @@ try:
 
     sequences = {}
     for key, data in data_dict.items():
-        # Créer des séquences de longueur fixe
-        num_seqs = len(data) // max_seq_len
+        # S'assurer que data est un array numpy 1D
+        if hasattr(data, "flatten"):
+            data_flat = data.flatten()
+        else:
+            data_flat = np.array(data).flatten()
+
+        # Calculer le nombre de séquences possibles
+        total_elements = len(data_flat)
+        num_seqs = total_elements // max_seq_len
+
+        print(
+            f"🔧 {key}: {total_elements} éléments -> {num_seqs} séquences de {max_seq_len}"
+        )
+
         if num_seqs > 0:
+            # Prendre seulement les éléments qui peuvent former des séquences complètes
+            usable_elements = num_seqs * max_seq_len
+            data_to_reshape = data_flat[:usable_elements]
+
             sequences[key] = torch.tensor(
-                data[: num_seqs * max_seq_len].reshape(num_seqs, max_seq_len),
-                dtype=torch.long,
+                data_to_reshape.reshape(num_seqs, max_seq_len), dtype=torch.long
+            )
+        else:
+            # Si pas assez de données, créer une séquence minimale
+            print(
+                f"⚠️ Pas assez de données pour {key}, création d'une séquence minimale"
+            )
+            min_data = data_flat[: min(len(data_flat), max_seq_len)]
+            # Padding si nécessaire
+            if len(min_data) < max_seq_len:
+                min_data = np.pad(
+                    min_data,
+                    (0, max_seq_len - len(min_data)),
+                    "constant",
+                    constant_values=0,
+                )
+
+            sequences[key] = torch.tensor(
+                min_data.reshape(1, max_seq_len), dtype=torch.long
             )
 
-    print(f"✅ Séquences créées: {list(sequences.keys())}")
+    print(f"✅ Séquences créées: {[(k, v.shape) for k, v in sequences.items()]}")
 
     # 3. Créer le module d'entrée
     print("\n🏗️ Module d'entrée...")
