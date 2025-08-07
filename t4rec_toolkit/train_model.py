@@ -162,9 +162,10 @@ try:
                 config["vocab_size"], config["embed_dim"]
             )
 
-            # Positional encoding
+            # Positional encoding flexible (max possible length)
+            max_seq_len = config["seq_len"]  # Utiliser la longueur originale
             self.pos_encoding = nn.Parameter(
-                torch.randn(config["seq_len"], config["embed_dim"])
+                torch.randn(max_seq_len, config["embed_dim"])
             )
 
             # Transformer layers
@@ -196,8 +197,19 @@ try:
             # Combine features (moyenne simple)
             combined_emb = (item_emb + user_emb) / 2
 
-            # Add positional encoding
-            combined_emb = combined_emb + self.pos_encoding.unsqueeze(0)
+            # Add positional encoding - s'adapter à la longueur de la séquence
+            if seq_len <= self.pos_encoding.shape[0]:
+                # Utiliser seulement les premiers seq_len éléments du positional encoding
+                pos_enc = self.pos_encoding[:seq_len].unsqueeze(
+                    0
+                )  # [1, seq_len, embed]
+                combined_emb = combined_emb + pos_enc
+            else:
+                # Si la séquence est plus longue, répéter le positional encoding
+                pos_enc = self.pos_encoding.unsqueeze(0).repeat(
+                    1, (seq_len // self.pos_encoding.shape[0]) + 1, 1
+                )
+                combined_emb = combined_emb + pos_enc[:, :seq_len, :]
 
             # Transformer
             transformer_out = self.transformer(combined_emb)  # [batch, seq, embed]
