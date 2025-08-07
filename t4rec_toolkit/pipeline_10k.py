@@ -442,20 +442,23 @@ def create_training_sequences(seq_data, cat_data, target_data, config):
         seq_values = []
         for col_data in seq_data.data.values():
             if isinstance(col_data, np.ndarray) and len(col_data) > idx:
-                seq_values.extend(
-                    col_data[idx][: seq_len // 2]
-                )  # Prendre première moitié
+                # col_data[idx] est un scalaire, on l'ajoute directement
+                seq_values.append(float(col_data[idx]))
 
         cat_values = []
         for col_data in cat_data.data.values():
             if isinstance(col_data, np.ndarray) and len(col_data) > idx:
-                cat_values.extend(
-                    col_data[idx][: seq_len // 2]
-                )  # Prendre première moitié
+                # col_data[idx] est un scalaire, on l'ajoute directement
+                cat_values.append(float(col_data[idx]))
 
-        # Combiner et ajuster à la longueur de séquence
-        combined = (seq_values + cat_values)[:seq_len]
-        combined.extend([0] * (seq_len - len(combined)))  # Padding
+        # Combiner toutes les features pour cette ligne
+        combined = seq_values + cat_values
+
+        # Ajuster à la longueur de séquence (padding ou troncature)
+        if len(combined) < seq_len:
+            combined.extend([0.0] * (seq_len - len(combined)))  # Padding
+        else:
+            combined = combined[:seq_len]  # Troncature
 
         if len(combined) == seq_len:
             sequences.append(combined)
