@@ -330,15 +330,15 @@ class SequenceTransformer(BaseTransformer):
                     "recommendations": analysis.recommendations,
                 }
 
-        # Créer le résultat
+                # Créer le résultat
         from t4rec_toolkit.core.base_transformer import TransformationResult
 
         result = TransformationResult(
-            transformed_data=transformed_data,
+            data=transformed_data,
             feature_info=feature_info,
             original_columns=original_columns,
             transformation_steps=transformation_steps,
-            statistics={
+            config={
                 "quality_metrics": quality_metrics,
                 "n_features_in": len(self.feature_columns),
                 "n_features_out": len(transformed_data),
@@ -413,5 +413,6 @@ class SequenceTransformer(BaseTransformer):
                 continue
 
         return suitable_columns
+
 
 
