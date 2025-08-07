@@ -246,8 +246,9 @@ try:
         ],
     )
 
-    # Modèle final
-    model = tr.Model(body, prediction_task, inputs=embedding_module)
+    # Modèle final - Signature correcte pour T4Rec 23.04.00
+    head = tr.Head(body, prediction_task)
+    model = tr.Model(head)
 
     print("✅ MODÈLE T4REC XLNET CRÉÉ AVEC SUCCÈS!")
     print(
@@ -343,3 +344,4 @@ except Exception as e:
     import traceback
 
     traceback.print_exc()
+
