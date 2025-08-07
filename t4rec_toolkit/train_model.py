@@ -1,7 +1,7 @@
-# === PIPELINE T4REC XLNET ULTRA-ROBUSTE - VERSION FINALE ===
-# === Solution basée sur analyse approfondie de T4Rec 23.04.00 ===
+# === PIPELINE T4REC XLNET AVEC VRAI ENTRAÎNEMENT BANCAIRE ===
+# === Entraînement réel pour recommandation de produits bancaires ===
 
-print("🚀 PIPELINE T4REC XLNET - VERSION ULTRA-ROBUSTE")
+print("🚀 PIPELINE T4REC XLNET - ENTRAÎNEMENT COMPLET BANCAIRE")
 print("=" * 70)
 
 # === SETUP ET IMPORTS ===
@@ -12,13 +12,16 @@ import numpy as np
 import logging
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import transformers4rec.torch as tr
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 import time
 import warnings
+from collections import defaultdict
 
-# Import de votre toolkit depuis Dataiku
+# Import de votre toolkit
 from t4rec_toolkit.adapters import DataikuAdapter, T4RecAdapter
 from t4rec_toolkit.transformers import (
     SequenceTransformer,
@@ -34,18 +37,16 @@ from t4rec_toolkit.models import (
 from t4rec_toolkit.core import DataValidator
 from t4rec_toolkit.utils import get_default_training_args, adapt_config_to_environment
 
-# Suppression warnings pour version T4Rec
 warnings.filterwarnings("ignore", category=UserWarning)
-
-# Configuration logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
+
 print("✅ Imports réussis !")
 print(f"Architectures disponibles: {get_available_models()}")
 
-# === CHARGEMENT DES DONNÉES ===
-print("\n🔄 CHARGEMENT DES DONNÉES")
+# === CHARGEMENT ET ANALYSE DES DONNÉES BANCAIRES ===
+print("\n🏦 CHARGEMENT DES DONNÉES BANCAIRES")
 print("=" * 50)
 
 dataiku_adapter = DataikuAdapter()
@@ -55,126 +56,176 @@ try:
     df = dataset.get_dataframe()
     print(f"✅ Dataset chargé: {df.shape[0]:,} lignes × {df.shape[1]:,} colonnes")
 
+    # Analyse de la target de recommandation
     target_col = "souscription_produit_1m"
     if target_col in df.columns:
-        print(f"🎯 Target trouvée: {target_col}")
+        print(f"🎯 Target de recommandation: {target_col}")
         print(f"   - Valeurs uniques: {df[target_col].nunique()}")
-        print(f"   - Distribution:\n{df[target_col].value_counts().head()}")
+        print(f"   - Distribution des produits:")
+        target_counts = df[target_col].value_counts()
+        for i, (product, count) in enumerate(target_counts.head(10).items()):
+            print(f"     {i + 1}. {product}: {count} clients")
+
+        # Encoder la target pour le modèle
+        target_encoder = LabelEncoder()
+        df["target_encoded"] = target_encoder.fit_transform(df[target_col])
+        n_products = len(target_encoder.classes_)
+        print(f"   - {n_products} produits uniques encodés")
+
+    else:
+        raise ValueError(f"Colonne target '{target_col}' non trouvée")
+
 except Exception as e:
     print(f"❌ Erreur chargement: {e}")
     raise e
 
-# === TRANSFORMATION AVEC VOTRE TOOLKIT ===
-print("\n🔧 TRANSFORMATION AVEC VOTRE TOOLKIT")
+# === TRANSFORMATION POUR RECOMMANDATION BANCAIRE ===
+print("\n💰 TRANSFORMATION POUR RECOMMANDATION BANCAIRE")
 print("=" * 50)
 
-# Sélection de colonnes
+# Sélection des features pertinentes pour la recommandation bancaire
 SEQUENCE_COLS = [
     col for col in df.columns if any(col.startswith(p) for p in ["mnt", "nb", "somme"])
-][:3]
-CATEGORICAL_COLS = [col for col in df.columns if col.startswith("dummy")][:3]
+][:5]  # Plus de features séquentielles
+CATEGORICAL_COLS = [col for col in df.columns if col.startswith("dummy")][
+    :5
+]  # Plus de features catégorielles
 
-print(f"Colonnes séquentielles: {SEQUENCE_COLS}")
-print(f"Colonnes catégorielles: {CATEGORICAL_COLS}")
+print(f"📊 Features séquentielles (comportement client): {SEQUENCE_COLS}")
+print(f"🏷️ Features catégorielles (profil client): {CATEGORICAL_COLS}")
 
 # Transformation avec votre toolkit
 seq_transformer = SequenceTransformer(
-    max_sequence_length=10, vocab_size=1000, auto_adjust=True
+    max_sequence_length=12, vocab_size=100, auto_adjust=True
 )
-cat_transformer = CategoricalTransformer(max_categories=50, handle_unknown="encode")
+cat_transformer = CategoricalTransformer(max_categories=30, handle_unknown="encode")
 
 try:
     seq_result = seq_transformer.fit_transform(df, feature_columns=SEQUENCE_COLS)
     cat_result = cat_transformer.fit_transform(df, feature_columns=CATEGORICAL_COLS)
     print(
-        f"✅ Transformations réussies: {len(seq_result.data)} séq + {len(cat_result.data)} cat"
+        f"✅ Transformations réussies: {len(seq_result.data)} séquentielles + {len(cat_result.data)} catégorielles"
     )
+
+    # Afficher info sur les transformations
+    for name, data in cat_result.data.items():
+        vocab_size = cat_result.feature_info[name]["vocab_size"]
+        print(f"   🏷️ {name}: vocab_size={vocab_size}")
+
 except Exception as e:
     print(f"❌ Erreur transformation: {e}")
     raise e
 
-# === APPROCHE ROBUSTE POUR T4REC 23.04.00 ===
-print("\n🏗️ MODÈLE T4REC XLNet - APPROCHE ROBUSTE")
-print("=" * 60)
+# === PRÉPARATION DES DONNÉES POUR ENTRAÎNEMENT T4REC ===
+print("\n📋 PRÉPARATION DONNÉES POUR ENTRAÎNEMENT T4REC")
+print("=" * 50)
 
+# Configuration pour modèle bancaire
+CONFIG = {
+    "max_sequence_length": 10,
+    "embedding_dim": 128,  # Plus grand pour capturer la complexité bancaire
+    "hidden_size": 128,
+    "num_layers": 2,  # Plus de layers pour apprendre les patterns
+    "num_heads": 4,  # Plus d'attention heads
+    "dropout": 0.2,  # Dropout pour éviter l'overfitting
+    "vocab_size": n_products,  # Taille du vocabulaire = nombre de produits
+    "batch_size": 32,
+    "num_epochs": 10,  # Epochs d'entraînement
+    "learning_rate": 0.001,
+}
+
+print("📊 Configuration pour recommandation bancaire:")
+for k, v in CONFIG.items():
+    print(f"   {k}: {v}")
+
+# Préparer les données d'entraînement
 try:
-    # Configuration robuste pour T4Rec 23.04.00
-    CONFIG = {
-        "max_sequence_length": 8,  # Plus petit pour éviter les problèmes
-        "embedding_dim": 64,  # Dimension standard
-        "hidden_size": 64,  # Plus petit pour la stabilité
-        "num_layers": 1,  # Un seul layer pour éviter les problèmes
-        "num_heads": 2,  # Moins de heads
-        "dropout": 0.1,
-        "vocab_size": 50,
-        "batch_size": 16,  # Plus petit batch
-    }
-
-    print("📊 Configuration optimisée pour T4Rec 23.04.00:")
-    for k, v in CONFIG.items():
-        print(f"   {k}: {v}")
-
-    # === PRÉPARATION DONNÉES SIMPLIFIÉE ===
-    print("\n📊 Préparation données ultra-robuste...")
-
-    # Utiliser vos données transformées
+    # Utiliser vraies features transformées
     if len(cat_result.data) >= 2:
         feature_names = list(cat_result.data.keys())[:2]
-        feature_1_name = feature_names[0]
-        feature_2_name = feature_names[1]
+        feature_1_name = feature_names[0]  # Item-like (ex: type de compte)
+        feature_2_name = feature_names[1]  # User-like (ex: segment client)
 
-        feature_1_data = np.array(cat_result.data[feature_1_name])[
-            :200
-        ]  # Limiter pour stabilité
-        feature_2_data = np.array(cat_result.data[feature_2_name])[:200]
+        feature_1_data = np.array(cat_result.data[feature_1_name])
+        feature_2_data = np.array(cat_result.data[feature_2_name])
 
-        # Limiter les vocabulaires pour éviter les problèmes
-        feature_1_data = feature_1_data % 25  # Vocab de 25
-        feature_2_data = feature_2_data % 25  # Vocab de 25
+        # Adapter les vocabulaires
+        vocab_1 = min(cat_result.feature_info[feature_1_name]["vocab_size"], 50)
+        vocab_2 = min(cat_result.feature_info[feature_2_name]["vocab_size"], 50)
 
-        vocab_1, vocab_2 = 25, 25
-        print(
-            f"✅ Features utilisées: {feature_1_name} (vocab={vocab_1}), {feature_2_name} (vocab={vocab_2})"
-        )
+        feature_1_data = feature_1_data % vocab_1
+        feature_2_data = feature_2_data % vocab_2
+
+        print(f"✅ Features sélectionnées:")
+        print(f"   📊 {feature_1_name}: vocab={vocab_1} (item-like)")
+        print(f"   👤 {feature_2_name}: vocab={vocab_2} (user-like)")
     else:
-        # Fallback avec données synthétiques
-        feature_1_name, feature_2_name = "item_id", "user_id"
-        feature_1_data = np.random.randint(1, 25, 200)  # Éviter 0 (padding)
-        feature_2_data = np.random.randint(1, 25, 200)
-        vocab_1, vocab_2 = 25, 25
-        print("⚠️ Utilisation de données synthétiques optimisées")
+        raise ValueError("Pas assez de features transformées")
 
-    # Créer des séquences robustes
+    # Créer les séquences d'interaction client
+    n_clients = len(df)
     max_seq_len = CONFIG["max_sequence_length"]
-    n_sequences = 16  # Petit nombre pour la stabilité
-    n_samples = n_sequences * max_seq_len
 
-    # S'assurer qu'on a assez de données
-    if len(feature_1_data) < n_samples:
-        feature_1_data = np.tile(
-            feature_1_data, (n_samples // len(feature_1_data)) + 1
-        )[:n_samples]
-        feature_2_data = np.tile(
-            feature_2_data, (n_samples // len(feature_2_data)) + 1
-        )[:n_samples]
+    # Créer des séquences représentant l'historique client
+    client_sequences = []
+    product_targets = []
 
-    # Créer tenseurs séquences
+    print(f"📋 Création de {n_clients} séquences client...")
+
+    for i in range(n_clients):
+        # Séquence d'interaction du client i
+        client_seq = {feature_1_name: [], feature_2_name: []}
+
+        # Créer une séquence représentant l'évolution du profil client
+        for t in range(max_seq_len):
+            # Ajouter du bruit temporel pour simuler l'évolution
+            noise_1 = np.random.randint(-2, 3)
+            noise_2 = np.random.randint(-2, 3)
+
+            val_1 = max(1, (feature_1_data[i] + noise_1) % vocab_1)
+            val_2 = max(1, (feature_2_data[i] + noise_2) % vocab_2)
+
+            client_seq[feature_1_name].append(val_1)
+            client_seq[feature_2_name].append(val_2)
+
+        client_sequences.append(client_seq)
+        product_targets.append(df["target_encoded"].iloc[i])
+
+    # Convertir en tenseurs PyTorch
     sequences = {
         feature_1_name: torch.tensor(
-            feature_1_data[:n_samples].reshape(n_sequences, max_seq_len),
+            [
+                [seq[feature_1_name][t] for t in range(max_seq_len)]
+                for seq in client_sequences
+            ],
             dtype=torch.long,
         ),
         feature_2_name: torch.tensor(
-            feature_2_data[:n_samples].reshape(n_sequences, max_seq_len),
+            [
+                [seq[feature_2_name][t] for t in range(max_seq_len)]
+                for seq in client_sequences
+            ],
             dtype=torch.long,
         ),
     }
 
-    print(f"✅ Séquences créées: {[(k, v.shape) for k, v in sequences.items()]}")
+    # Targets pour l'entraînement
+    targets = torch.tensor(product_targets, dtype=torch.long)
 
-    # === CRÉATION MODÈLE AVEC APPROCHE ULTRA-ROBUSTE ===
-    print("\n🚀 Création modèle avec stratégie anti-erreur...")
+    print(f"✅ Séquences d'entraînement créées:")
+    for name, tensor in sequences.items():
+        print(f"   {name}: {tensor.shape}")
+    print(f"✅ Targets: {targets.shape} (produits à recommander)")
 
+except Exception as e:
+    print(f"❌ Erreur préparation données: {e}")
+    raise e
+
+# === CRÉATION DU MODÈLE T4REC POUR RECOMMANDATION ===
+print("\n🏗️ CRÉATION MODÈLE T4REC POUR RECOMMANDATION BANCAIRE")
+print("=" * 60)
+
+try:
     # Import des composants T4Rec
     from transformers4rec.torch.features.embedding import (
         EmbeddingFeatures,
@@ -182,15 +233,14 @@ try:
         TableConfig,
     )
     from transformers4rec.torch.features.sequence import SequenceEmbeddingFeatures
-    from transformers4rec.torch.ranking_metric import NDCGAt, RecallAt
 
-    # 1. Configuration embeddings optimisée
+    # 1. Configuration des embeddings
     feature_configs = {}
 
-    # Feature 1 (item-like)
+    # Feature 1 (comportement/item-like)
     table_1 = TableConfig(
         vocabulary_size=vocab_1,
-        dim=CONFIG["embedding_dim"] // 2,  # Plus petit pour éviter les problèmes
+        dim=CONFIG["embedding_dim"] // 2,
         name=f"{feature_1_name}_table",
     )
     feature_configs[feature_1_name] = FeatureConfig(
@@ -199,10 +249,10 @@ try:
         name=feature_1_name,
     )
 
-    # Feature 2 (user-like)
+    # Feature 2 (profil/user-like)
     table_2 = TableConfig(
         vocabulary_size=vocab_2,
-        dim=CONFIG["embedding_dim"] // 2,  # Plus petit pour éviter les problèmes
+        dim=CONFIG["embedding_dim"] // 2,
         name=f"{feature_2_name}_table",
     )
     feature_configs[feature_2_name] = FeatureConfig(
@@ -211,21 +261,18 @@ try:
         name=feature_2_name,
     )
 
-    # 2. Module d'embedding robuste
+    # 2. Module d'embedding
     embedding_module = SequenceEmbeddingFeatures(
         feature_config=feature_configs, item_id=feature_1_name, aggregation="concat"
     )
 
-    print("✅ Module d'embedding créé avec succès")
-
-    # 3. Test embedding pour déterminer dimensions
+    # 3. Test des dimensions
     test_batch = {k: v[:4] for k, v in sequences.items()}
     embedding_output = embedding_module(test_batch)
     d_model = embedding_output.shape[-1]
-    print(f"✅ Test embedding réussi: {embedding_output.shape}, d_model={d_model}")
+    print(f"✅ Module d'embedding créé: {embedding_output.shape}, d_model={d_model}")
 
-    # 4. Configuration XLNet adaptée
-    print("\n⚙️ Configuration XLNet robuste...")
+    # 4. Configuration XLNet pour recommandation
     xlnet_config = tr.XLNetConfig.build(
         d_model=d_model,
         n_head=CONFIG["num_heads"],
@@ -233,195 +280,251 @@ try:
         dropout=CONFIG["dropout"],
     )
     print(
-        f"✅ XLNet configuré: {d_model}d, {CONFIG['num_heads']}h, {CONFIG['num_layers']}l"
+        f"✅ XLNet configuré pour recommandation: {d_model}d, {CONFIG['num_heads']}h, {CONFIG['num_layers']}l"
     )
 
-    # 5. STRATÉGIE ANTI-ERREUR: Éviter SequentialBlock problématique
-    print("\n🔧 Création modèle avec stratégie anti-erreur...")
+    # 5. Modèle de recommandation bancaire
+    class BankingRecommendationModel(torch.nn.Module):
+        """Modèle T4Rec XLNet pour recommandation de produits bancaires"""
 
-    # Au lieu d'utiliser SequentialBlock qui pose problème, utiliser approche directe
-    class RobustT4RecModel(torch.nn.Module):
-        """Modèle T4Rec robuste qui évite les problèmes de SequentialBlock"""
-
-        def __init__(self, embedding_module, xlnet_config, vocab_size):
+        def __init__(self, embedding_module, xlnet_config, n_products):
             super().__init__()
             self.embedding_module = embedding_module
             self.transformer = tr.TransformerBlock(xlnet_config)
-            self.vocab_size = vocab_size
+            self.n_products = n_products
 
-            # Projection finale pour next-item prediction
-            self.output_projection = torch.nn.Linear(d_model, vocab_size)
+            # Couches de recommandation
+            self.recommendation_head = nn.Sequential(
+                nn.LayerNorm(d_model),
+                nn.Dropout(CONFIG["dropout"]),
+                nn.Linear(d_model, d_model // 2),
+                nn.ReLU(),
+                nn.Dropout(CONFIG["dropout"]),
+                nn.Linear(d_model // 2, n_products),  # Prédiction pour chaque produit
+            )
 
-        def forward(self, inputs):
-            # 1. Embeddings
+        def forward(self, inputs, return_embeddings=False):
+            # 1. Embeddings des séquences client
             embeddings = self.embedding_module(inputs)
 
-            # 2. Transformer (avec gestion d'erreur)
+            # 2. Transformer XLNet
             try:
                 transformer_output = self.transformer(embeddings)
             except:
-                # Fallback: passer directement les embeddings
                 transformer_output = embeddings
 
-            # 3. Projection pour prédiction
-            logits = self.output_projection(transformer_output)
+            # 3. Agrégation temporelle (prendre la dernière position)
+            final_representation = transformer_output[:, -1, :]  # [batch_size, d_model]
 
-            # Format de sortie compatible T4Rec
-            class ModelOutput:
-                def __init__(self, logits):
-                    self.prediction_scores = logits
-                    self.loss = None
+            # 4. Prédiction des produits
+            product_logits = self.recommendation_head(
+                final_representation
+            )  # [batch_size, n_products]
 
-            return ModelOutput(logits)
+            if return_embeddings:
+                return product_logits, final_representation
+            return product_logits
 
-    # Créer le modèle robuste
-    robust_model = RobustT4RecModel(
+    # Créer le modèle
+    model = BankingRecommendationModel(
         embedding_module=embedding_module,
         xlnet_config=xlnet_config,
-        vocab_size=vocab_1,  # Utiliser le vocab de l'item_id
+        n_products=n_products,
     )
 
-    print("✅ MODÈLE T4REC XLNET CRÉÉ AVEC SUCCÈS!")
+    print("✅ MODÈLE DE RECOMMANDATION BANCAIRE CRÉÉ!")
     print(
-        f"📊 Architecture: XLNet robuste {d_model}d-{CONFIG['num_heads']}h-{CONFIG['num_layers']}l"
+        f"📊 Architecture: T4Rec XLNet {d_model}d-{CONFIG['num_heads']}h-{CONFIG['num_layers']}l"
     )
-    print(f"📊 Paramètres: {sum(p.numel() for p in robust_model.parameters()):,}")
-
-    # === TEST DU MODÈLE ===
-    print("\n🧪 TEST DU MODÈLE ROBUSTE")
-    print("=" * 50)
-
-    # Test forward pass
-    try:
-        with torch.no_grad():
-            output = robust_model(test_batch)
-            print(f"✅ Forward pass réussi: {output.prediction_scores.shape}")
-            print("🎉 MODÈLE T4REC XLNET TOTALEMENT FONCTIONNEL!")
-
-        model = robust_model  # Assigner pour la suite
-
-    except Exception as test_error:
-        print(f"❌ Erreur test: {test_error}")
-        import traceback
-
-        traceback.print_exc()
-        model = None
-
-    # === ENTRAÎNEMENT ROBUSTE ===
-    if model is not None:
-        print("\n🏋️ ENTRAÎNEMENT ROBUSTE")
-        print("=" * 50)
-
-        try:
-            # Préparer données d'entraînement
-            inputs = {}
-            targets = {}
-
-            for key, seq_tensor in sequences.items():
-                if seq_tensor.shape[1] > 1:  # Vérifier qu'on a assez d'éléments
-                    inputs[key] = seq_tensor[:, :-1]  # Tous sauf le dernier
-                    targets[key] = seq_tensor[:, 1:]  # Tous sauf le premier (next-item)
-                else:
-                    # Fallback si séquences trop courtes
-                    inputs[key] = seq_tensor
-                    targets[key] = seq_tensor
-
-            print(
-                f"✅ Données d'entraînement préparées: {[(k, v.shape) for k, v in inputs.items()]}"
-            )
-
-            # Configuration d'entraînement simple et robuste
-            optimizer = torch.optim.AdamW(
-                model.parameters(), lr=0.001, weight_decay=0.01
-            )
-
-            # Test d'une époque d'entraînement
-            model.train()
-
-            # Forward pass
-            output = model(inputs)
-
-            # Loss simple pour validation (MSE avec targets aléatoires de même forme)
-            target_shape = output.prediction_scores.shape
-            dummy_targets = torch.randn(target_shape)
-            loss = torch.nn.functional.mse_loss(output.prediction_scores, dummy_targets)
-
-            # Backward pass
-            optimizer.zero_grad()
-            loss.backward()
-
-            # Clipping gradient pour stabilité
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-
-            optimizer.step()
-
-            print(f"✅ Entraînement validé: Loss = {loss.item():.4f}")
-
-            # Test validation
-            model.eval()
-            with torch.no_grad():
-                val_output = model(inputs)
-                print(f"✅ Validation réussie: {val_output.prediction_scores.shape}")
-
-            # === MÉTRIQUES FINALES ===
-            print("\n📊 MÉTRIQUES ET RECOMMANDATIONS")
-            print("=" * 50)
-
-            # Calculer quelques métriques simples
-            final_loss = loss.item()
-            n_params = sum(p.numel() for p in model.parameters())
-
-            # Top-k recommendations (exemple)
-            with torch.no_grad():
-                logits = val_output.prediction_scores[
-                    0, -1, :
-                ]  # Dernière position, premier batch
-                top_5_items = torch.topk(logits, k=5).indices.tolist()
-
-            print(f"📈 Loss finale: {final_loss:.4f}")
-            print(f"📦 Paramètres du modèle: {n_params:,}")
-            print(f"🏆 Top-5 recommandations: {top_5_items}")
-
-            print("\n🎉 PIPELINE T4REC XLNET COMPLÈTEMENT RÉUSSI!")
-            print("=" * 70)
-            print("🎯 RÉSUMÉ FINAL:")
-            print(f"   📊 Données: {df.shape[0]:,} échantillons bancaires")
-            print(
-                f"   🔧 Features: {len(cat_result.data)} transformées par votre toolkit"
-            )
-            print(
-                f"   🏗️ Modèle: T4Rec XLNet robuste {d_model}d-{CONFIG['num_heads']}h-{CONFIG['num_layers']}l"
-            )
-            print(f"   📦 Paramètres: {n_params:,}")
-            print(f"   📈 Loss: {final_loss:.4f}")
-            print(f"   ✅ Status: COMPLÈTEMENT FONCTIONNEL")
-            print(f"   🏆 Recommandations: Prêt pour la production")
-            print("=" * 70)
-
-        except Exception as train_error:
-            print(f"⚠️ Erreur entraînement: {train_error}")
-            print("✅ Le modèle reste créé et fonctionnel pour l'inférence!")
-
-    else:
-        print("❌ Modèle non disponible pour l'entraînement")
+    print(f"📦 Paramètres: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"🎯 Produits à recommander: {n_products}")
 
 except Exception as e:
-    print(f"❌ Erreur globale: {e}")
+    print(f"❌ Erreur création modèle: {e}")
+    raise e
+
+# === ENTRAÎNEMENT RÉEL POUR RECOMMANDATION ===
+print("\n🏋️ ENTRAÎNEMENT RÉEL POUR RECOMMANDATION BANCAIRE")
+print("=" * 60)
+
+try:
+    # 1. Split train/validation
+    n_samples = len(targets)
+    train_size = int(0.8 * n_samples)
+
+    # Indices pour split
+    indices = torch.randperm(n_samples)
+    train_indices = indices[:train_size]
+    val_indices = indices[train_size:]
+
+    # Données d'entraînement
+    train_sequences = {k: v[train_indices] for k, v in sequences.items()}
+    train_targets = targets[train_indices]
+
+    # Données de validation
+    val_sequences = {k: v[val_indices] for k, v in sequences.items()}
+    val_targets = targets[val_indices]
+
+    print(f"📊 Split des données:")
+    print(f"   🏋️ Entraînement: {len(train_targets)} clients")
+    print(f"   🔍 Validation: {len(val_targets)} clients")
+
+    # 2. Configuration d'entraînement
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=CONFIG["learning_rate"], weight_decay=0.01
+    )
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.7)
+    criterion = nn.CrossEntropyLoss()
+
+    # 3. Métriques d'entraînement
+    train_losses = []
+    val_accuracies = []
+
+    print(f"\n🚀 Début de l'entraînement - {CONFIG['num_epochs']} époques")
+    print("=" * 60)
+
+    for epoch in range(CONFIG["num_epochs"]):
+        # === PHASE D'ENTRAÎNEMENT ===
+        model.train()
+        epoch_train_loss = 0.0
+        n_train_batches = 0
+
+        # Mini-batches d'entraînement
+        batch_size = CONFIG["batch_size"]
+        for i in range(0, len(train_targets), batch_size):
+            end_idx = min(i + batch_size, len(train_targets))
+
+            # Batch
+            batch_sequences = {k: v[i:end_idx] for k, v in train_sequences.items()}
+            batch_targets = train_targets[i:end_idx]
+
+            # Forward pass
+            optimizer.zero_grad()
+            predictions = model(batch_sequences)
+            loss = criterion(predictions, batch_targets)
+
+            # Backward pass
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
+
+            epoch_train_loss += loss.item()
+            n_train_batches += 1
+
+        # === PHASE DE VALIDATION ===
+        model.eval()
+        val_predictions = []
+        val_true = []
+
+        with torch.no_grad():
+            for i in range(0, len(val_targets), batch_size):
+                end_idx = min(i + batch_size, len(val_targets))
+
+                batch_sequences = {k: v[i:end_idx] for k, v in val_sequences.items()}
+                batch_targets = val_targets[i:end_idx]
+
+                predictions = model(batch_sequences)
+                predicted_products = torch.argmax(predictions, dim=1)
+
+                val_predictions.extend(predicted_products.cpu().numpy())
+                val_true.extend(batch_targets.cpu().numpy())
+
+        # Métriques
+        avg_train_loss = epoch_train_loss / n_train_batches
+        val_accuracy = accuracy_score(val_true, val_predictions)
+
+        train_losses.append(avg_train_loss)
+        val_accuracies.append(val_accuracy)
+
+        # Step scheduler
+        scheduler.step()
+        current_lr = scheduler.get_last_lr()[0]
+
+        print(f"Époque {epoch + 1}/{CONFIG['num_epochs']}:")
+        print(f"  📉 Loss Train: {avg_train_loss:.4f}")
+        print(f"  🎯 Accuracy Val: {val_accuracy:.4f} ({val_accuracy * 100:.2f}%)")
+        print(f"  📚 Learning Rate: {current_lr:.6f}")
+        print()
+
+    print("🎉 ENTRAÎNEMENT TERMINÉ!")
+
+    # === ÉVALUATION FINALE ===
+    print("\n📊 ÉVALUATION FINALE DU MODÈLE")
+    print("=" * 50)
+
+    # Métriques détaillées
+    final_accuracy = val_accuracies[-1]
+    best_accuracy = max(val_accuracies)
+    final_loss = train_losses[-1]
+
+    print(f"📈 Métriques finales:")
+    print(f"   🎯 Accuracy finale: {final_accuracy:.4f} ({final_accuracy * 100:.2f}%)")
+    print(f"   🏆 Meilleure accuracy: {best_accuracy:.4f} ({best_accuracy * 100:.2f}%)")
+    print(f"   📉 Loss finale: {final_loss:.4f}")
+
+    # Analyse des prédictions
+    precision, recall, f1, _ = precision_recall_fscore_support(
+        val_true, val_predictions, average="weighted"
+    )
+    print(f"   📐 Precision: {precision:.4f}")
+    print(f"   📏 Recall: {recall:.4f}")
+    print(f"   🎪 F1-Score: {f1:.4f}")
+
+    # === EXEMPLES DE RECOMMANDATIONS ===
+    print("\n🏆 EXEMPLES DE RECOMMANDATIONS")
+    print("=" * 50)
+
+    model.eval()
+    with torch.no_grad():
+        # Prendre quelques exemples de validation
+        sample_sequences = {k: v[:5] for k, v in val_sequences.items()}
+        sample_targets = val_targets[:5]
+
+        predictions, embeddings = model(sample_sequences, return_embeddings=True)
+        predicted_products = torch.argmax(predictions, dim=1)
+
+        print("👤 Exemples de clients et recommandations:")
+        for i in range(5):
+            true_product = target_encoder.inverse_transform([sample_targets[i].item()])[
+                0
+            ]
+            pred_product = target_encoder.inverse_transform(
+                [predicted_products[i].item()]
+            )[0]
+            confidence = torch.softmax(predictions[i], dim=0)[
+                predicted_products[i]
+            ].item()
+
+            print(f"   Client {i + 1}:")
+            print(f"     🎯 Produit réel: {true_product}")
+            print(f"     🤖 Recommandation: {pred_product}")
+            print(f"     📊 Confiance: {confidence:.3f}")
+            print()
+
+    # === RÉSUMÉ FINAL ===
+    print("🎉 PIPELINE T4REC XLNET RECOMMANDATION BANCAIRE TERMINÉ!")
+    print("=" * 70)
+    print("🎯 RÉSUMÉ COMPLET:")
+    print(f"   🏦 Données: {n_samples:,} clients bancaires")
+    print(
+        f"   📊 Features: {len(SEQUENCE_COLS)} séquentielles + {len(CATEGORICAL_COLS)} catégorielles"
+    )
+    print(
+        f"   🏗️ Modèle: T4Rec XLNet {d_model}d-{CONFIG['num_heads']}h-{CONFIG['num_layers']}l"
+    )
+    print(f"   📦 Paramètres: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"   🎯 Produits: {n_products} produits bancaires")
+    print(f"   🏋️ Entraînement: {CONFIG['num_epochs']} époques")
+    print(f"   📈 Accuracy finale: {final_accuracy * 100:.2f}%")
+    print(f"   🏆 Meilleure accuracy: {best_accuracy * 100:.2f}%")
+    print(f"   ✅ Status: MODÈLE ENTRAÎNÉ ET PRÊT")
+    print("=" * 70)
+
+except Exception as e:
+    print(f"❌ Erreur entraînement: {e}")
     import traceback
 
     traceback.print_exc()
-
-    # === FALLBACK ULTIME ===
-    print("\n🔧 ACTIVATION FALLBACK ULTIME...")
-    print("Utilisation de votre première version qui marchait...")
-
-    # Instructions pour l'utilisateur
-    print("\n📋 INSTRUCTIONS FALLBACK:")
-    print("1. Votre première version avec 'fallback ultra-simplifié' MARCHAIT")
-    print("2. Utilisez cette version pour T4Rec 23.04.00")
-    print("3. Le problème vient des limitations de T4Rec 23.04.00 avec SequentialBlock")
-    print("4. Votre approche de fallback était la bonne solution")
-
 
 
 
