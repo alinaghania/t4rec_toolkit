@@ -103,6 +103,7 @@ try:
         "num_heads": 4,
         "dropout": 0.1,
         "vocab_size": 100,
+        "batch_size": 32,
     }
 
     print("📊 Préparation des données pour T4Rec...")
@@ -216,6 +217,11 @@ try:
         print(f"⚠️ Erreur test embedding: {emb_error}")
         d_model = CONFIG["embedding_dim"] * len(feature_configs)
 
+    # S'assurer que d_model est défini pour les fallbacks
+    if "d_model" not in locals() or d_model is None:
+        d_model = CONFIG["embedding_dim"] * len(feature_configs)
+        print(f"🔧 d_model fallback: {d_model}")
+
     # 4. Configuration XLNet selon la documentation
     print("\n⚙️ Configuration XLNet...")
     xlnet_config = tr.XLNetConfig.build(
@@ -265,8 +271,8 @@ try:
             transformer_block = tr.Block(
                 transformer_body,
                 output_size=torch.Size(
-                    [4, 10, d_model]
-                ),  # Utiliser les dimensions connues
+                    [CONFIG["batch_size"], CONFIG["max_sequence_length"], d_model]
+                ),  # Utiliser les dimensions de config
             )
 
             # Corps complet avec le Block wrappé
@@ -284,7 +290,9 @@ try:
             simple_body = tr.SequentialBlock(
                 embedding_module,
                 tr.MLPBlock([d_model]),
-                output_size=torch.Size([4, 10, d_model]),
+                output_size=torch.Size(
+                    [CONFIG["batch_size"], CONFIG["max_sequence_length"], d_model]
+                ),
             )
 
             head = tr.Head(simple_body, prediction_task)
@@ -385,5 +393,6 @@ except Exception as e:
     import traceback
 
     traceback.print_exc()
+
 
 
