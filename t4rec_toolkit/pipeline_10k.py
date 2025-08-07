@@ -1,4 +1,3 @@
-
 # === PIPELINE T4REC XLNET OPTIMISÉ - DATAIKU 10K LIGNES ===
 # Pipeline adapté aux vraies données avec sélection intelligente de 12 colonnes
 
@@ -11,6 +10,19 @@ from datetime import datetime
 import warnings
 
 warnings.filterwarnings("ignore")
+
+# Progress bars et logging
+from tqdm.auto import tqdm
+import logging
+import time
+
+# Configuration logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 # Imports T4Rec et votre toolkit
 import sys
@@ -34,6 +46,8 @@ from t4rec_toolkit.adapters.dataiku_adapter import DataikuAdapter
 
 print("🚀 PIPELINE T4REC XLNET - DATAIKU 10K LIGNES OPTIMISÉ")
 print("=" * 70)
+logger.info("Démarrage du pipeline T4Rec XLNet optimisé")
+start_time = time.time()
 
 # === CONFIGURATION OPTIMISÉE POUR 10K LIGNES ===
 CONFIG = {
@@ -139,7 +153,11 @@ def load_data_smart():
 
 
 # Charger les données
-df_raw = load_data_smart()
+logger.info("Début chargement des données...")
+with tqdm(total=1, desc="📊 Chargement données") as pbar:
+    df_raw = load_data_smart()
+    pbar.update(1)
+logger.info(f"Données chargées: {df_raw.shape}")
 
 # === VÉRIFICATION ET NETTOYAGE COLONNES ===
 print("\n🔍 3. VÉRIFICATION COLONNES...")
@@ -228,7 +246,10 @@ def verify_and_fix_columns(df, config):
 
 
 # Vérifier et corriger la configuration
-CONFIG = verify_and_fix_columns(df_raw, CONFIG)
+logger.info("Vérification et correction des colonnes...")
+with tqdm(total=1, desc="🔍 Vérification colonnes") as pbar:
+    CONFIG = verify_and_fix_columns(df_raw, CONFIG)
+    pbar.update(1)
 
 # Vérifier que nous avons assez de colonnes
 total_features = len(CONFIG["sequence_cols"]) + len(CONFIG["categorical_cols"])
@@ -268,16 +289,20 @@ def process_data_chunks(df, chunk_size=2000):
     chunks_processed = []
     num_chunks = len(df) // chunk_size + (1 if len(df) % chunk_size else 0)
 
-    print(f"   🔄 Processing {num_chunks} chunks de {chunk_size} lignes...")
+    logger.info(f"Processing {num_chunks} chunks de {chunk_size} lignes...")
 
-    for i in range(num_chunks):
-        start_idx = i * chunk_size
-        end_idx = min((i + 1) * chunk_size, len(df))
-        chunk = df.iloc[start_idx:end_idx].copy()
+    with tqdm(total=num_chunks, desc="🔄 Processing chunks") as pbar:
+        for i in range(num_chunks):
+            start_idx = i * chunk_size
+            end_idx = min((i + 1) * chunk_size, len(df))
+            chunk = df.iloc[start_idx:end_idx].copy()
 
-        if len(chunk) > 0:
-            chunks_processed.append(chunk)
-            print(f"   📊 Chunk {i + 1}/{num_chunks}: {len(chunk)} lignes")
+            if len(chunk) > 0:
+                chunks_processed.append(chunk)
+                pbar.set_postfix(
+                    {"Chunk": f"{i + 1}/{num_chunks}", "Lignes": len(chunk)}
+                )
+            pbar.update(1)
 
     return pd.concat(chunks_processed, ignore_index=True)
 
@@ -298,14 +323,18 @@ cat_transformer = CategoricalTransformer(
 )
 
 # Transformer séquences
-print("   🔄 Transformation séquentielles...")
-seq_result = seq_transformer.fit_transform(df_processed, CONFIG["sequence_cols"])
-print(f"   ✅ Séquentielles transformées: {len(seq_result)} features")
+logger.info("Transformation des features séquentielles...")
+with tqdm(total=1, desc="🔄 Transform séquentielles") as pbar:
+    seq_result = seq_transformer.fit_transform(df_processed, CONFIG["sequence_cols"])
+    pbar.update(1)
+logger.info(f"Séquentielles transformées: {len(seq_result)} features")
 
 # Transformer catégorielles
-print("   🔄 Transformation catégorielles...")
-cat_result = cat_transformer.fit_transform(df_processed, CONFIG["categorical_cols"])
-print(f"   ✅ Catégorielles transformées: {len(cat_result)} features")
+logger.info("Transformation des features catégorielles...")
+with tqdm(total=1, desc="🔄 Transform catégorielles") as pbar:
+    cat_result = cat_transformer.fit_transform(df_processed, CONFIG["categorical_cols"])
+    pbar.update(1)
+logger.info(f"Catégorielles transformées: {len(cat_result)} features")
 
 # Préparer target
 target_data = df_processed[CONFIG["target_col"]].values
@@ -380,9 +409,12 @@ class OptimizedBankingModel(nn.Module):
 
 
 # Créer le modèle
-model = OptimizedBankingModel(CONFIG)
-total_params = sum(p.numel() for p in model.parameters())
-print(f"✅ Modèle créé: {total_params:,} paramètres")
+logger.info("Création du modèle T4Rec optimisé...")
+with tqdm(total=1, desc="🏗️ Création modèle") as pbar:
+    model = OptimizedBankingModel(CONFIG)
+    total_params = sum(p.numel() for p in model.parameters())
+    pbar.update(1)
+logger.info(f"Modèle créé: {total_params:,} paramètres")
 
 # === PRÉPARATION ENTRAÎNEMENT ===
 print("\n🏋️ 7. PRÉPARATION ENTRAÎNEMENT...")
@@ -430,13 +462,14 @@ def create_training_sequences(seq_data, cat_data, target_data, config):
 
 
 # Créer les séquences
-print("   📊 Création séquences d'entraînement...")
-item_sequences, target_sequences = create_training_sequences(
-    seq_result, cat_result, target_data, CONFIG
-)
-user_sequences = item_sequences.copy()  # Simplifié pour cet exemple
-
-print(f"   ✅ Séquences créées: {item_sequences.shape}")
+logger.info("Création des séquences d'entraînement...")
+with tqdm(total=1, desc="📊 Création séquences") as pbar:
+    item_sequences, target_sequences = create_training_sequences(
+        seq_result, cat_result, target_data, CONFIG
+    )
+    user_sequences = item_sequences.copy()  # Simplifié pour cet exemple
+    pbar.update(1)
+logger.info(f"Séquences créées: {item_sequences.shape}")
 
 # Encoder targets
 from sklearn.preprocessing import LabelEncoder
@@ -515,71 +548,91 @@ def evaluate_model(model, val_items, val_users, val_targets, batch_size):
 
 
 # Boucle d'entraînement
+logger.info(f"Début entraînement: {CONFIG['num_epochs']} époques")
 print(f"🚀 Début entraînement: {CONFIG['num_epochs']} époques")
 print("=" * 60)
 
 training_history = []
 
-for epoch in range(CONFIG["num_epochs"]):
-    # Entraînement
-    train_loss = train_epoch(
-        model,
-        train_items,
-        train_users,
-        train_targets,
-        CONFIG["batch_size"],
-        optimizer,
-        criterion,
-    )
+# Progress bar pour les époques
+with tqdm(total=CONFIG["num_epochs"], desc="🚀 Entraînement") as epoch_pbar:
+    for epoch in range(CONFIG["num_epochs"]):
+        # Entraînement
+        train_loss = train_epoch(
+            model,
+            train_items,
+            train_users,
+            train_targets,
+            CONFIG["batch_size"],
+            optimizer,
+            criterion,
+        )
 
-    # Validation
-    val_accuracy = evaluate_model(
-        model, val_items, val_users, val_targets, CONFIG["batch_size"]
-    )
+        # Validation
+        val_accuracy = evaluate_model(
+            model, val_items, val_users, val_targets, CONFIG["batch_size"]
+        )
 
-    # Scheduler
-    scheduler.step()
+        # Scheduler
+        scheduler.step()
 
-    # Log
-    current_lr = scheduler.get_last_lr()[0]
-    training_history.append(
-        {
-            "epoch": epoch + 1,
-            "train_loss": train_loss,
-            "val_accuracy": val_accuracy,
-            "learning_rate": current_lr,
-        }
-    )
+        # Log
+        current_lr = scheduler.get_last_lr()[0]
+        training_history.append(
+            {
+                "epoch": epoch + 1,
+                "train_loss": train_loss,
+                "val_accuracy": val_accuracy,
+                "learning_rate": current_lr,
+            }
+        )
 
-    print(
-        f"Époque {epoch + 1:2d}/{CONFIG['num_epochs']} | "
-        f"Loss: {train_loss:.4f} | "
-        f"Val Acc: {val_accuracy:.4f} | "
-        f"LR: {current_lr:.6f}"
-    )
+        # Update progress bar
+        epoch_pbar.set_postfix(
+            {
+                "Loss": f"{train_loss:.4f}",
+                "Val Acc": f"{val_accuracy:.4f}",
+                "LR": f"{current_lr:.6f}",
+            }
+        )
+        epoch_pbar.update(1)
+
+        # Log détaillé
+        logger.info(
+            f"Époque {epoch + 1:2d}/{CONFIG['num_epochs']} | "
+            f"Loss: {train_loss:.4f} | "
+            f"Val Acc: {val_accuracy:.4f} | "
+            f"LR: {current_lr:.6f}"
+        )
 
 print("=" * 60)
+logger.info("Entraînement terminé!")
 print("✅ Entraînement terminé!")
 
 # === ÉVALUATION FINALE ===
 print("\n📊 9. ÉVALUATION FINALE...")
 
 # Métriques détaillées sur validation
+logger.info("Calcul des métriques finales...")
 model.eval()
 all_predictions = []
 all_targets = []
 
+num_val_batches = (len(val_items) + CONFIG["batch_size"] - 1) // CONFIG["batch_size"]
 with torch.no_grad():
-    for i in range(0, len(val_items), CONFIG["batch_size"]):
-        batch_items = val_items[i : i + CONFIG["batch_size"]]
-        batch_users = val_users[i : i + CONFIG["batch_size"]]
-        batch_targets = val_targets[i : i + CONFIG["batch_size"]]
+    with tqdm(total=num_val_batches, desc="📊 Évaluation finale") as eval_pbar:
+        for i in range(0, len(val_items), CONFIG["batch_size"]):
+            batch_items = val_items[i : i + CONFIG["batch_size"]]
+            batch_users = val_users[i : i + CONFIG["batch_size"]]
+            batch_targets = val_targets[i : i + CONFIG["batch_size"]]
 
-        outputs = model(batch_items, batch_users)
-        _, predicted = torch.max(outputs, 1)
+            outputs = model(batch_items, batch_users)
+            _, predicted = torch.max(outputs, 1)
 
-        all_predictions.extend(predicted.cpu().numpy())
-        all_targets.extend(batch_targets.cpu().numpy())
+            all_predictions.extend(predicted.cpu().numpy())
+            all_targets.extend(batch_targets.cpu().numpy())
+
+            eval_pbar.update(1)
 
 # Calculer métriques
 from sklearn.metrics import (
@@ -720,26 +773,38 @@ df_metrics = pd.DataFrame(metrics_output)
 df_metrics["analysis_date"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 # Sauvegarder dans Dataiku
-try:
-    print("   💾 Sauvegarde features...")
-    features_dataset.write_with_schema(df_features)
-    print("   ✅ Features sauvegardées")
-except Exception as e:
-    print(f"   ⚠️ Erreur features: {e}")
+logger.info("Sauvegarde des résultats dans Dataiku...")
+save_tasks = ["Features", "Prédictions", "Métriques"]
+with tqdm(total=3, desc="💾 Sauvegarde") as save_pbar:
+    try:
+        features_dataset.write_with_schema(df_features)
+        logger.info("Features sauvegardées")
+        save_pbar.set_postfix({"Status": "Features OK"})
+        save_pbar.update(1)
+    except Exception as e:
+        logger.error(f"Erreur features: {e}")
+        save_pbar.set_postfix({"Status": "Features ERROR"})
+        save_pbar.update(1)
 
-try:
-    print("   💾 Sauvegarde prédictions...")
-    predictions_dataset.write_with_schema(df_predictions)
-    print("   ✅ Prédictions sauvegardées")
-except Exception as e:
-    print(f"   ⚠️ Erreur prédictions: {e}")
+    try:
+        predictions_dataset.write_with_schema(df_predictions)
+        logger.info("Prédictions sauvegardées")
+        save_pbar.set_postfix({"Status": "Prédictions OK"})
+        save_pbar.update(1)
+    except Exception as e:
+        logger.error(f"Erreur prédictions: {e}")
+        save_pbar.set_postfix({"Status": "Prédictions ERROR"})
+        save_pbar.update(1)
 
-try:
-    print("   💾 Sauvegarde métriques...")
-    metrics_dataset.write_with_schema(df_metrics)
-    print("   ✅ Métriques sauvegardées")
-except Exception as e:
-    print(f"   ⚠️ Erreur métriques: {e}")
+    try:
+        metrics_dataset.write_with_schema(df_metrics)
+        logger.info("Métriques sauvegardées")
+        save_pbar.set_postfix({"Status": "Métriques OK"})
+        save_pbar.update(1)
+    except Exception as e:
+        logger.error(f"Erreur métriques: {e}")
+        save_pbar.set_postfix({"Status": "Métriques ERROR"})
+        save_pbar.update(1)
 
 # === RÉSUMÉ FINAL ===
 print("\n" + "=" * 70)
@@ -778,4 +843,12 @@ elif final_accuracy > 0.4:
 else:
     print(f"\n🟠 MOYEN! Modèle à retravailler")
 
+# Temps total d'exécution
+total_time = time.time() - start_time
+logger.info(
+    f"Pipeline terminé en {total_time:.1f} secondes ({total_time / 60:.1f} minutes)"
+)
+print(f"⏱️ Temps total d'exécution: {total_time:.1f}s ({total_time / 60:.1f}min)")
+
 print("=" * 70)
+
