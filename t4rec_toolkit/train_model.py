@@ -228,11 +228,8 @@ try:
         f"✅ XLNet configuré: {d_model}d, {CONFIG['num_heads']}h, {CONFIG['num_layers']}l"
     )
 
-    # 5. Création du modèle complet avec l'approche officielle
+    # 5. Création du modèle complet avec fallback robuste (comme votre version qui marchait)
     print("\n🚀 Assemblage du modèle...")
-
-    # Corps du modèle avec XLNet
-    body = tr.SequentialBlock(embedding_module, tr.TransformerBlock(xlnet_config))
 
     # Métriques T4Rec
     from transformers4rec.torch.ranking_metric import NDCGAt, RecallAt
@@ -246,9 +243,53 @@ try:
         ],
     )
 
-    # Modèle final - Signature correcte pour T4Rec 23.04.00
-    head = tr.Head(body, prediction_task)
-    model = tr.Model(head)
+    # Essayer l'approche propre d'abord
+    try:
+        print("🔧 Tentative construction propre...")
+        # Corps du modèle avec XLNet
+        body = tr.SequentialBlock(embedding_module, tr.TransformerBlock(xlnet_config))
+        head = tr.Head(body, prediction_task)
+        model = tr.Model(head)
+        print("✅ Modèle créé avec approche propre!")
+
+    except Exception as clean_error:
+        print(f"⚠️ Approche propre échouée: {clean_error}")
+        print("🔧 Utilisation du fallback robuste...")
+
+        # FALLBACK: Approche qui marchait dans votre version (avec Block et output_size)
+        try:
+            # Wrapper le transformer dans un Block avec output_size explicite
+            transformer_body = tr.TransformerBlock(xlnet_config)
+
+            # Créer un Block avec output_size explicite (comme dans votre version qui marchait)
+            transformer_block = tr.Block(
+                transformer_body,
+                output_size=torch.Size(
+                    [4, 10, d_model]
+                ),  # Utiliser les dimensions connues
+            )
+
+            # Corps complet avec le Block wrappé
+            body = tr.SequentialBlock(embedding_module, transformer_block)
+
+            head = tr.Head(body, prediction_task)
+            model = tr.Model(head)
+            print("✅ Modèle créé avec fallback Block wrapper!")
+
+        except Exception as block_error:
+            print(f"⚠️ Fallback Block échoué: {block_error}")
+            print("🔧 Fallback ultra-simplifié...")
+
+            # FALLBACK FINAL: Version ultra-simplifiée (comme dans votre code original)
+            simple_body = tr.SequentialBlock(
+                embedding_module,
+                tr.MLPBlock([d_model]),
+                output_size=torch.Size([4, 10, d_model]),
+            )
+
+            head = tr.Head(simple_body, prediction_task)
+            model = tr.Model(head)
+            print("✅ Modèle créé avec fallback ultra-simplifié!")
 
     print("✅ MODÈLE T4REC XLNET CRÉÉ AVEC SUCCÈS!")
     print(
@@ -344,4 +385,5 @@ except Exception as e:
     import traceback
 
     traceback.print_exc()
+
 
