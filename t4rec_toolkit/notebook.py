@@ -158,8 +158,11 @@ try:
     # 6. Construire le modèle
     print("\n🚀 Construction du modèle...")
 
+    # Corps du modèle avec projection explicite
     body = tr.SequentialBlock(
-        input_module, tr.TransformerBlock(xlnet_config, masking=input_module.masking)
+        input_module,
+        tr.TransformerBlock(xlnet_config, masking=input_module.masking),
+        tr.MLPBlock([CONFIG["d_model"]]),  # Projection explicite pour T4Rec 23.04.00
     )
 
     from transformers4rec.torch.ranking_metric import NDCGAt, RecallAt
@@ -168,12 +171,10 @@ try:
         body,
         tr.NextItemPredictionTask(
             weight_tying=True,
-            hf_format=True,
             metrics=[
                 NDCGAt(top_ks=[5, 10], labels_onehot=True),
                 RecallAt(top_ks=[5, 10], labels_onehot=True),
             ],
-            loss_function="cross_entropy",
         ),
         inputs=input_module,
     )
