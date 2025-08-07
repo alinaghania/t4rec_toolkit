@@ -256,14 +256,33 @@ class BaseModelBuilder(ABC):
                 return None
 
             # Créer le module avec TabularSequenceFeatures.from_schema
+            # Nouvelle version qui marche
             input_module = tr.TabularSequenceFeatures.from_schema(
                 schema=merlin_schema,
                 max_sequence_length=max_sequence_length,
                 continuous_projection=d_model,
                 aggregation="concat",
-                masking=masking,
-                automatic_build=True
+                masking=None,  # D'ABORD None
+                automatic_build=False  # Changer en False
             )
+            
+            # Puis ajouter le masking séparément
+            try:
+                from transformers4rec.torch.masking import MaskSequence
+                
+                masking_module = MaskSequence(
+                    schema=merlin_schema.select_by_tag(Tags.ITEM),
+                    hidden_size=d_model,  # PARAMÈTRE OBLIGATOIRE
+                    max_sequence_length=max_sequence_length,
+                    masking_prob=0.2,
+                    padding_idx=0
+                )
+                input_module.masking = masking_module
+                logger.info("✅ Masking assigné avec hidden_size")
+                
+            except Exception as e:
+                logger.warning(f"⚠️ Masking échoué: {e}, continuons sans masking")
+                input_module.masking = None
 
             # Vérifier que le module a été créé correctement
             if input_module is None:
