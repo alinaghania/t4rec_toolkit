@@ -158,11 +158,23 @@ try:
     # 6. Construire le modèle
     print("\n🚀 Construction du modèle...")
 
-    # Corps du modèle avec projection explicite
+    # D'abord, construire le module d'entrée avec un batch dummy
+    print("🔧 Construction du module d'entrée...")
+    dummy_batch = {}
+    for key, data in t4rec_data.items():
+        tensor = torch.tensor(data[:4], dtype=torch.long)  # Petit batch
+        seq_tensor = tensor.unsqueeze(1).expand(-1, CONFIG["max_sequence_length"])
+        dummy_batch[key] = seq_tensor
+
+    # Construire le module d'entrée
+    input_output = input_module(dummy_batch)
+    print(f"✅ Module d'entrée construit, output shape: {input_output.shape}")
+
+    # Maintenant construire le corps avec les bonnes dimensions
     body = tr.SequentialBlock(
         input_module,
         tr.TransformerBlock(xlnet_config, masking=input_module.masking),
-        tr.MLPBlock([CONFIG["d_model"]]),  # Projection explicite pour T4Rec 23.04.00
+        tr.MLPBlock([CONFIG["d_model"]]),  # Projection vers la dimension du modèle
     )
 
     from transformers4rec.torch.ranking_metric import NDCGAt, RecallAt
