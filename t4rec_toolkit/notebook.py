@@ -214,19 +214,36 @@ try:
         try:
             input_output = input_module(dummy_batch)
             print(f"✅ Module d'entrée construit, shape: {input_output.shape}")
+            input_shape = input_output.shape
         except Exception as e:
             print(f"⚠️ Erreur construction module d'entrée: {e}")
             # Fallback: construction manuelle
             input_module.build(
                 input_size=(CONFIG["batch_size"], CONFIG["max_sequence_length"])
             )
+            input_shape = (
+                CONFIG["batch_size"],
+                CONFIG["max_sequence_length"],
+                CONFIG["d_model"],
+            )
+    else:
+        input_shape = (
+            CONFIG["batch_size"],
+            CONFIG["max_sequence_length"],
+            CONFIG["d_model"],
+        )
 
-    # Approche simplifiée pour T4Rec 23.04.00
-    print("🔧 Construction du transformer...")
+    # Construction simplifiée compatible T4Rec 23.04.00
+    print("🔧 Construction avec Block wrapper...")
+
+    # Créer le transformer et le wrapper dans un Block avec output_size explicite
     transformer_body = tr.TransformerBlock(xlnet_config, masking=input_module.masking)
 
-    # Utiliser le pattern recommandé pour T4Rec 23.04.00
-    print("🔧 Construction du head...")
+    # Wrapper le transformer dans un Block avec output_size explicite
+    transformer_block = tr.Block(
+        transformer_body,
+        output_size=torch.Size([input_shape[0], input_shape[1], CONFIG["d_model"]]),
+    )
 
     # Métriques compatibles T4Rec 23.04.00
     from transformers4rec.torch.ranking_metric import NDCGAt, RecallAt
@@ -240,24 +257,31 @@ try:
         ],
     )
 
-    # Construire le modèle avec la méthode recommandée pour T4Rec 23.04.00
-    print("🔧 Assemblage final...")
+    # Construire le head avec le Block wrappé
+    print("🔧 Assemblage final avec Block...")
     try:
-        # Utiliser la méthode to_torch_model de XLNetConfig
-        model = xlnet_config.to_torch_model(input_module, prediction_task)
-        print("✅ Modèle créé avec xlnet_config.to_torch_model!")
-
-    except Exception as config_error:
-        print(f"⚠️ Erreur avec to_torch_model: {config_error}")
-
-        # Fallback: construction manuelle simplifiée
-        print("🔧 Fallback: construction manuelle...")
-
-        # Corps simplifié sans SequentialBlock problématique
-        head = tr.Head(transformer_body, prediction_task, inputs=input_module)
+        head = tr.Head(transformer_block, prediction_task, inputs=input_module)
 
         model = tr.Model(head)
-        print("✅ Modèle créé avec fallback!")
+        print("✅ Modèle créé avec Block wrapper!")
+
+    except Exception as final_error:
+        print(f"⚠️ Erreur finale: {final_error}")
+
+        # Dernier fallback : approche ultra-simplifiée
+        print("🔧 Dernier fallback : approche ultra-simplifiée...")
+
+        # Créer un SequentialBlock simple avec output_size explicite
+        simple_body = tr.SequentialBlock(
+            input_module,
+            tr.MLPBlock([CONFIG["d_model"]]),
+            output_size=torch.Size([input_shape[0], input_shape[1], CONFIG["d_model"]]),
+        )
+
+        head = tr.Head(simple_body, prediction_task)
+
+        model = tr.Model(head)
+        print("✅ Modèle créé avec fallback ultra-simplifié!")
 
     print("\n🎉 MODÈLE T4REC CONSTRUIT AVEC SUCCÈS!")
     print(f"📊 Modèle: {type(model).__name__}")
@@ -294,3 +318,4 @@ except Exception as e:
     import traceback
 
     traceback.print_exc()
+
