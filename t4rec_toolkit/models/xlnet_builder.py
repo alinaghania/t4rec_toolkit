@@ -59,9 +59,9 @@ class XLNetModelBuilder(BaseModelBuilder):
            'masking': 'mlm',         # Type de masking
            'log_attention_weights': False, # Log des poids d'attention
            'use_projection': True,   # Utiliser projection MLP
-           'projection_dim': None    # Dimension projection (None = d_model),
-          'vocab_size': 1000,  # AJOUTER CETTE LIGNE
-          'hidden_size': 256   # AJOUTER CETTE LIGNE AUSSI
+           'projection_dim': None,   # Dimension projection (None = d_model)
+           'vocab_size': 1000,       # Taille du vocabulaire
+           'hidden_size': 256        # Taille cachée pour masking
        }
    
    def get_required_parameters(self) -> List[str]:
@@ -143,6 +143,14 @@ class XLNetModelBuilder(BaseModelBuilder):
        if config['projection_dim'] is None:
            config['projection_dim'] = config['d_model']
        
+       # Assurer que hidden_size existe pour le masking
+       if 'hidden_size' not in config or config['hidden_size'] is None:
+           config['hidden_size'] = config['d_model']
+       
+       # Assurer que vocab_size existe
+       if 'vocab_size' not in config or config['vocab_size'] is None:
+           config['vocab_size'] = 1000
+       
        return config
    
    def build_transformer_config(self, **config) -> Any:
@@ -162,20 +170,19 @@ class XLNetModelBuilder(BaseModelBuilder):
            
            # Construire la configuration XLNet
            transformer_config = tr.XLNetConfig.build(
-                d_model=validated_config['d_model'],
-                n_head=validated_config['n_head'],
-                n_layer=validated_config['n_layer'],
-                total_seq_length=validated_config['max_sequence_length'],
-                attn_type=validated_config.get('attn_type', 'bi'),
-                hidden_act=validated_config.get('hidden_act', 'gelu'),
-                initializer_range=validated_config.get('initializer_range', 0.02),
-                layer_norm_eps=validated_config.get('layer_norm_eps', 1e-12),
-                dropout=validated_config['dropout'],
-                pad_token=validated_config.get('pad_token', 0),
-                log_attention_weights=validated_config.get('log_attention_weights', False),
-                mem_len=validated_config.get('mem_len', 50),
-                # NOUVEAUX PARAMÈTRES OBLIGATOIRES pour T4Rec 23.04.00:
-                vocab_size=validated_config.get('vocab_size', 1000)
+               d_model=validated_config['d_model'],
+               n_head=validated_config['n_head'],
+               n_layer=validated_config['n_layer'],
+               total_seq_length=validated_config['max_sequence_length'],
+               attn_type=validated_config.get('attn_type', 'bi'),
+               hidden_act=validated_config.get('hidden_act', 'gelu'),
+               initializer_range=validated_config.get('initializer_range', 0.02),
+               layer_norm_eps=validated_config.get('layer_norm_eps', 1e-12),
+               dropout=validated_config['dropout'],
+               pad_token=validated_config.get('pad_token', 0),
+               log_attention_weights=validated_config.get('log_attention_weights', False),
+               mem_len=validated_config.get('mem_len', 50),
+               vocab_size=validated_config.get('vocab_size', 1000)
            )
            
            logger.info(f"Configuration XLNet créée: d_model={validated_config['d_model']}, "
