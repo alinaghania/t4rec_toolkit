@@ -104,14 +104,14 @@ try:
     # 3. Créer le module d'entrée SANS masking d'abord
     print("\n🏗️ Module d'entrée sans masking...")
     
-    # Étape 1: Créer sans masking pour éviter l'erreur
+    # Étape 1: Créer AVEC automatic_build=True car on a des features continues
     input_module = tr.TabularSequenceFeatures.from_schema(
         schema=schema,
         max_sequence_length=CONFIG['max_sequence_length'],
         continuous_projection=CONFIG['d_model'],
         aggregation="concat",
         masking=None,  # PAS de masking initially
-        automatic_build=False  # CHANGÉ en False pour T4Rec 23.04.00
+        automatic_build=True  # DOIT être True avec continuous_projection
     )
     
     print(f"✅ Module créé: {type(input_module).__name__}")
