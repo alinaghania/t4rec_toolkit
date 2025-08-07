@@ -1,370 +1,373 @@
-# === PHASE 1 : EXPLORATION ET VALIDATION - DATAIKU PARTITIONNÉ ===
-# Analyse de BASE_SCORE_COMPLETE_prepared pour déploiement T4Rec sur 2024
+# === ANALYSE RAPIDE ÉCHANTILLON - BASE_SCORE_COMPLETE_prepared ===
+# Version optimisée pour analyser rapidement la structure sans surcharger
 
 import dataiku
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 import json
 import warnings
 
 warnings.filterwarnings("ignore")
 
-print("🔍 PHASE 1 : EXPLORATION BASE_SCORE_COMPLETE_prepared")
-print("=" * 70)
+print("🔍 ANALYSE RAPIDE ÉCHANTILLON - BASE_SCORE_COMPLETE_prepared")
+print("=" * 65)
+
+# === CONFIGURATION ÉCHANTILLONNAGE ===
+SAMPLE_SIZE = 1000  # Petit échantillon pour rapidité
+MAX_PARTITIONS_TO_CHECK = 2  # Maximum 2 partitions pour aller vite
 
 # === CONNEXION DATASETS DATAIKU ===
-print("\n📊 1. CONNEXION AUX DATASETS...")
+print("\n📊 1. CONNEXION DATASET...")
 
 # Input : Table partitionnée source
 input_dataset = dataiku.Dataset("BASE_SCORE_COMPLETE_prepared")
 
-# Output : Résultats d'analyse (à créer dans Dataiku)
-output_dataset = dataiku.Dataset("T4REC_ANALYSIS_PHASE1")
+# Output : Résultats d'analyse rapide
+output_dataset = dataiku.Dataset("T4REC_SAMPLE_ANALYSIS")
 
-# === ANALYSE PARTITIONS DISPONIBLES ===
-print("\n📅 2. ANALYSE DES PARTITIONS...")
-
-try:
-    # Récupérer les partitions disponibles
-    partitions = input_dataset.list_partitions()
-    print(f"✅ Partitions disponibles: {len(partitions)}")
-
-    # Filtrer les partitions 2024
-    partitions_2024 = [p for p in partitions if "2024" in p]
-    print(f"✅ Partitions 2024: {len(partitions_2024)}")
-    print(f"📋 Détail 2024: {partitions_2024}")
-
-except Exception as e:
-    print(f"⚠️ Erreur partitions: {e}")
-    # Fallback : prendre un échantillon
-    partitions_2024 = ["2024-01", "2024-02", "2024-03"]  # À adapter selon votre naming
-
-# === ÉCHANTILLONNAGE INTELLIGENT ===
-print("\n🔬 3. ÉCHANTILLONNAGE POUR ANALYSE...")
+# === RÉCUPÉRATION ÉCHANTILLON RAPIDE ===
+print(f"\n🔬 2. ÉCHANTILLONNAGE RAPIDE ({SAMPLE_SIZE} lignes)...")
 
 
-def sample_partition_data(partition_id, sample_size=10000):
-    """Échantillonne une partition de manière optimisée"""
+def get_quick_sample():
+    """Récupère rapidement un échantillon représentatif"""
     try:
-        # Lire avec limite pour éviter l'overflow mémoire
-        df_sample = input_dataset.get_dataframe(
-            partition=partition_id, limit=sample_size
-        )
-        return df_sample, len(df_sample)
+        # Méthode 1 : Essayer de prendre directement un échantillon
+        print("   📊 Tentative échantillon direct...")
+        df_sample = input_dataset.get_dataframe(limit=SAMPLE_SIZE)
+        print(f"   ✅ Échantillon obtenu: {df_sample.shape}")
+        return df_sample, "direct"
+
     except Exception as e:
-        print(f"⚠️ Erreur partition {partition_id}: {e}")
-        return None, 0
+        print(f"   ⚠️ Échantillon direct échoué: {e}")
+
+        try:
+            # Méthode 2 : Essayer via une partition récente
+            print("   📊 Tentative via partitions...")
+            partitions = input_dataset.list_partitions()
+
+            # Prendre les partitions les plus récentes (probablement 2024)
+            recent_partitions = sorted(partitions)[-MAX_PARTITIONS_TO_CHECK:]
+            print(f"   📅 Partitions testées: {recent_partitions}")
+
+            for partition in recent_partitions:
+                try:
+                    df_sample = input_dataset.get_dataframe(
+                        partition=partition, limit=SAMPLE_SIZE
+                    )
+                    if len(df_sample) > 0:
+                        print(
+                            f"   ✅ Échantillon obtenu via {partition}: {df_sample.shape}"
+                        )
+                        return df_sample, f"partition_{partition}"
+                except Exception as pe:
+                    print(f"   ⚠️ Partition {partition} échouée: {pe}")
+                    continue
+
+            # Si aucune partition ne marche
+            print("   ❌ Aucune partition accessible")
+            return None, "failed"
+
+        except Exception as e2:
+            print(f"   ❌ Méthode partitions échouée: {e2}")
+            return None, "failed"
 
 
-# Analyser 3 partitions représentatives
-sample_partitions = (
-    partitions_2024[:3] if len(partitions_2024) >= 3 else partitions_2024
-)
-analysis_results = {}
+# Récupérer l'échantillon
+df_sample, method = get_quick_sample()
 
-total_estimated_size = 0
-df_structure_sample = None
+if df_sample is None:
+    print("❌ IMPOSSIBLE D'OBTENIR UN ÉCHANTILLON")
+    print("🔍 Vérifiez les permissions d'accès au dataset")
+    exit()
 
-for partition in sample_partitions:
-    print(f"   📊 Analyse partition: {partition}")
-    df_sample, size = sample_partition_data(partition, sample_size=5000)
+print(f"✅ Échantillon récupéré via: {method}")
 
-    if df_sample is not None:
-        analysis_results[partition] = {
-            "rows_sampled": size,
-            "columns_count": len(df_sample.columns),
-            "memory_mb": df_sample.memory_usage(deep=True).sum() / 1024 / 1024,
-        }
+# === ANALYSE RAPIDE STRUCTURE ===
+print(f"\n🏗️ 3. ANALYSE STRUCTURE ({df_sample.shape})...")
 
-        # Garder un échantillon pour analyse structure
-        if df_structure_sample is None:
-            df_structure_sample = df_sample.copy()
+# Infos de base
+total_columns = len(df_sample.columns)
+total_rows = len(df_sample)
+memory_mb = df_sample.memory_usage(deep=True).sum() / 1024 / 1024
 
-        # Estimation taille totale (approximation)
-        if size > 0:
-            # Estimer le ratio échantillon/réel basé sur la taille
-            estimated_full_size = size * 20  # Hypothèse : échantillon = 5% du total
-            total_estimated_size += estimated_full_size
-            analysis_results[partition]["estimated_total_rows"] = estimated_full_size
+print(f"📊 Dimensions: {total_rows:,} lignes × {total_columns} colonnes")
+print(f"💾 Mémoire échantillon: {memory_mb:.1f} MB")
 
-print(f"✅ Échantillonnage terminé sur {len(analysis_results)} partitions")
+# === COMPARAISON AVEC TEST PRÉCÉDENT ===
+print("\n🔍 4. COMPATIBILITÉ AVEC VOTRE TEST...")
 
-# === ANALYSE STRUCTURE DES DONNÉES ===
-print("\n🏗️ 4. ANALYSE STRUCTURE DES DONNÉES...")
-
-if df_structure_sample is not None:
-    print(f"📊 Dataset échantillon: {df_structure_sample.shape}")
-
-    # === COLONNES DISPONIBLES ===
-    all_columns = list(df_structure_sample.columns)
-    print(f"📋 Total colonnes: {len(all_columns)}")
-
-    # === COMPARAISON AVEC LE TEST PRÉCÉDENT ===
-    # Colonnes utilisées dans votre test pipeline_t4rec_training.py
-    expected_sequence_cols = [
+# Colonnes attendues du test pipeline_t4rec_training.py
+expected_columns = {
+    "sequences": [
         "nbchqemigliss_m12",
         "nb_automobile_12dm",
         "mntecscrdimm",
         "mnt_euro_r_3m",
         "nb_contacts_accueil_service",
-    ]
-    expected_categorical_cols = [
-        "dummy:iac_epa:03",
-        "dummy:iac_epa:01",
-        "dummy:iac_epa:02",
-    ]
-    expected_target = "souscription_produit_1m"
-
-    print("\n🔍 5. COMPARAISON AVEC LE TEST PRÉCÉDENT...")
-
-    # Vérifier présence des colonnes
-    missing_seq_cols = [col for col in expected_sequence_cols if col not in all_columns]
-    missing_cat_cols = [
-        col for col in expected_categorical_cols if col not in all_columns
-    ]
-    target_present = expected_target in all_columns
-
-    # Chercher des colonnes similaires si manquantes
-    similar_cols = {}
-    for missing_col in missing_seq_cols + missing_cat_cols:
-        # Recherche par substring
-        similar = [
-            col
-            for col in all_columns
-            if any(part in col.lower() for part in missing_col.lower().split("_")[:2])
-        ]
-        if similar:
-            similar_cols[missing_col] = similar[:3]  # Top 3 similaires
-
-    # === ANALYSE TYPES ET QUALITÉ ===
-    print("\n📊 6. ANALYSE TYPES ET QUALITÉ...")
-
-    column_analysis = {}
-    for col in all_columns[:50]:  # Analyser les 50 premières colonnes
-        try:
-            col_info = {
-                "dtype": str(df_structure_sample[col].dtype),
-                "non_null_count": int(df_structure_sample[col].count()),
-                "null_percentage": round(
-                    (df_structure_sample[col].isnull().sum() / len(df_structure_sample))
-                    * 100,
-                    2,
-                ),
-                "unique_values": int(df_structure_sample[col].nunique())
-                if df_structure_sample[col].nunique() < 1000
-                else "1000+",
-            }
-
-            # Ajouter des stats selon le type
-            if pd.api.types.is_numeric_dtype(df_structure_sample[col]):
-                col_info["mean"] = (
-                    round(float(df_structure_sample[col].mean()), 2)
-                    if df_structure_sample[col].mean()
-                    == df_structure_sample[col].mean()
-                    else "NaN"
-                )
-                col_info["std"] = (
-                    round(float(df_structure_sample[col].std()), 2)
-                    if df_structure_sample[col].std() == df_structure_sample[col].std()
-                    else "NaN"
-                )
-
-            column_analysis[col] = col_info
-
-        except Exception as e:
-            column_analysis[col] = {"error": str(e)}
-
-    # === ESTIMATION VOLUMÉTRIE 2024 ===
-    print("\n📈 7. ESTIMATION VOLUMÉTRIE 2024...")
-
-    estimated_total_rows_2024 = total_estimated_size
-    estimated_total_cols = len(all_columns)
-    estimated_memory_gb = (estimated_total_rows_2024 * estimated_total_cols * 8) / (
-        1024**3
-    )  # 8 bytes par valeur approximatif
-
-    volumetry_estimation = {
-        "estimated_total_rows_2024": estimated_total_rows_2024,
-        "estimated_total_columns": estimated_total_cols,
-        "estimated_memory_gb": round(estimated_memory_gb, 2),
-        "estimated_processing_time_hours": round(
-            estimated_total_rows_2024 / 50000, 1
-        ),  # Approximation basée sur votre test
-        "recommended_chunk_size": min(10000, estimated_total_rows_2024 // 10),
-    }
-
-else:
-    print("❌ Aucun échantillon disponible pour analyse")
-    column_analysis = {}
-    volumetry_estimation = {}
-
-# === CONSOLIDATION RÉSULTATS ===
-print("\n📋 8. CONSOLIDATION DES RÉSULTATS...")
-
-final_analysis = {
-    "analysis_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    "partitions_analysis": analysis_results,
-    "columns_comparison": {
-        "total_columns_found": len(all_columns)
-        if df_structure_sample is not None
-        else 0,
-        "expected_sequence_cols": expected_sequence_cols,
-        "expected_categorical_cols": expected_categorical_cols,
-        "expected_target": expected_target,
-        "missing_sequence_cols": missing_seq_cols
-        if df_structure_sample is not None
-        else [],
-        "missing_categorical_cols": missing_cat_cols
-        if df_structure_sample is not None
-        else [],
-        "target_present": target_present if df_structure_sample is not None else False,
-        "similar_columns_found": similar_cols
-        if df_structure_sample is not None
-        else {},
-    },
-    "data_quality": column_analysis,
-    "volumetry_2024": volumetry_estimation,
-    "recommendations": [],
+    ],
+    "categoriques": ["dummy:iac_epa:03", "dummy:iac_epa:01", "dummy:iac_epa:02"],
+    "target": "souscription_produit_1m",
 }
 
-# === GÉNÉRATION RECOMMANDATIONS ===
-print("\n💡 9. GÉNÉRATION RECOMMANDATIONS...")
+all_columns = list(df_sample.columns)
+compatibility_report = {}
+
+# Vérifier chaque type de colonne
+for col_type, col_list in expected_columns.items():
+    if col_type == "target":
+        # Target est une seule colonne
+        found = col_list in all_columns
+        compatibility_report[col_type] = {
+            "expected": col_list,
+            "found": found,
+            "missing": [] if found else [col_list],
+        }
+        print(f"🎯 Target '{col_list}': {'✅ TROUVÉE' if found else '❌ MANQUANTE'}")
+    else:
+        # Listes de colonnes
+        missing = [col for col in col_list if col not in all_columns]
+        found_count = len(col_list) - len(missing)
+        compatibility_report[col_type] = {
+            "expected": col_list,
+            "found_count": found_count,
+            "missing": missing,
+        }
+        print(f"📋 {col_type.capitalize()}: {found_count}/{len(col_list)} trouvées")
+        if missing:
+            print(f"   ❌ Manquantes: {missing}")
+
+# === RECHERCHE COLONNES SIMILAIRES ===
+print("\n🔍 5. RECHERCHE COLONNES SIMILAIRES...")
+
+
+def find_similar_columns(missing_col, all_cols, max_results=3):
+    """Trouve des colonnes similaires par nom"""
+    similar = []
+    missing_lower = missing_col.lower()
+
+    # Recherche par mots-clés
+    keywords = missing_lower.replace(":", "_").split("_")
+
+    for col in all_cols:
+        col_lower = col.lower()
+        # Si au moins 2 mots-clés correspondent
+        matches = sum(1 for kw in keywords if kw in col_lower and len(kw) > 2)
+        if matches >= 2:
+            similar.append(col)
+
+    return similar[:max_results]
+
+
+similar_suggestions = {}
+all_missing = []
+
+for col_type, report in compatibility_report.items():
+    if "missing" in report and report["missing"]:
+        all_missing.extend(report["missing"])
+
+for missing_col in all_missing:
+    similar = find_similar_columns(missing_col, all_columns)
+    if similar:
+        similar_suggestions[missing_col] = similar
+        print(f"💡 '{missing_col}' → Similaires: {similar}")
+
+# === ANALYSE QUALITÉ RAPIDE ===
+print("\n📊 6. QUALITÉ DES DONNÉES (TOP 20 colonnes)...")
+
+quality_summary = {}
+sample_columns = all_columns[:20]  # Analyser seulement les 20 premières pour rapidité
+
+for col in sample_columns:
+    try:
+        null_pct = round((df_sample[col].isnull().sum() / len(df_sample)) * 100, 1)
+        unique_count = df_sample[col].nunique()
+        dtype = str(df_sample[col].dtype)
+
+        quality_summary[col] = {
+            "null_percentage": null_pct,
+            "unique_values": unique_count,
+            "dtype": dtype,
+        }
+
+        # Affichage condensé
+        status = "🟢" if null_pct < 10 else "🟡" if null_pct < 50 else "🔴"
+        print(
+            f"   {status} {col[:30]:<30} | {null_pct:>5.1f}% null | {unique_count:>4} uniques | {dtype}"
+        )
+
+    except Exception as e:
+        quality_summary[col] = {"error": str(e)}
+
+# === ESTIMATION VOLUMÉTRIE RAPIDE ===
+print("\n📈 7. ESTIMATION VOLUMÉTRIE 2024...")
+
+# Estimation très approximative basée sur l'échantillon
+if method.startswith("partition"):
+    # Si on a une partition, estimer pour 12 mois
+    estimated_rows_2024 = total_rows * 12
+elif method == "direct":
+    # Si échantillon direct, assumer que c'est représentatif
+    full_dataset_estimate = total_rows * 100  # Facteur approximatif
+    estimated_rows_2024 = full_dataset_estimate
+
+estimated_memory_gb = (estimated_rows_2024 * total_columns * 8) / (1024**3)
+estimated_processing_hours = estimated_rows_2024 / 10000  # Très approximatif
+
+print(f"📊 Estimation 2024:")
+print(f"   📈 Lignes estimées: ~{estimated_rows_2024:,}")
+print(f"   💾 Mémoire estimée: ~{estimated_memory_gb:.1f} GB")
+print(f"   ⏱️ Temps traitement estimé: ~{estimated_processing_hours:.1f}h")
+
+# === RECOMMANDATIONS RAPIDES ===
+print("\n💡 8. RECOMMANDATIONS...")
 
 recommendations = []
 
-# Recommandations basées sur l'analyse
-if df_structure_sample is not None:
-    if missing_seq_cols:
-        recommendations.append(
-            f"⚠️ Colonnes séquentielles manquantes: {missing_seq_cols}. Vérifier noms ou utiliser alternatives."
-        )
+# Compatibilité
+target_ok = compatibility_report.get("target", {}).get("found", False)
+seq_missing = len(compatibility_report.get("sequences", {}).get("missing", []))
+cat_missing = len(compatibility_report.get("categoriques", {}).get("missing", []))
 
-    if missing_cat_cols:
-        recommendations.append(
-            f"⚠️ Colonnes catégorielles manquantes: {missing_cat_cols}. Adapter le pipeline."
-        )
+if not target_ok:
+    recommendations.append(
+        "❌ CRITIQUE: Target manquante - Pipeline non utilisable tel quel"
+    )
+if seq_missing > 2:
+    recommendations.append(
+        f"⚠️ {seq_missing} colonnes séquentielles manquantes - Adapter le pipeline"
+    )
+if cat_missing > 1:
+    recommendations.append(
+        f"⚠️ {cat_missing} colonnes catégorielles manquantes - Vérifier encodage"
+    )
 
-    if not target_present:
-        recommendations.append(
-            f"❌ Target '{expected_target}' non trouvée. Pipeline non applicable sans adaptation."
-        )
+# Volume
+if estimated_memory_gb > 32:
+    recommendations.append(
+        f"💾 Volume important ({estimated_memory_gb:.1f}GB) - Processing par chunks nécessaire"
+    )
+if estimated_processing_hours > 4:
+    recommendations.append(
+        f"⏱️ Traitement long ({estimated_processing_hours:.1f}h) - Considérer sous-échantillonnage"
+    )
 
-    if estimated_memory_gb > 16:
-        recommendations.append(
-            f"💾 Volume important ({estimated_memory_gb:.1f}GB). Recommandé: processing par chunks."
-        )
+# Qualité
+high_null_cols = [
+    col
+    for col, info in quality_summary.items()
+    if isinstance(info, dict) and info.get("null_percentage", 0) > 50
+]
+if high_null_cols:
+    recommendations.append(
+        f"🔴 {len(high_null_cols)} colonnes >50% nulls - Vérifier qualité"
+    )
 
-    if estimated_total_rows_2024 > 100000:
-        recommendations.append(
-            f"⏱️ Volume important ({estimated_total_rows_2024:,} lignes). Temps d'entraînement estimé: {volumetry_estimation.get('estimated_processing_time_hours', '?')}h."
-        )
+# Afficher recommandations
+for i, rec in enumerate(recommendations, 1):
+    print(f"   {i}. {rec}")
 
-    if len(all_columns) > 500:
-        recommendations.append(
-            f"📊 Beaucoup de colonnes ({len(all_columns)}). Recommandé: sélection features pertinentes."
-        )
+# === VERDICT FINAL ===
+print("\n" + "=" * 65)
+print("🎯 VERDICT ANALYSE RAPIDE")
+print("=" * 65)
 
-final_analysis["recommendations"] = recommendations
+# Score de compatibilité
+compatibility_score = 0
+if target_ok:
+    compatibility_score += 40
+compatibility_score += max(0, (5 - seq_missing) * 8)  # 8 points par colonne seq trouvée
+compatibility_score += max(0, (3 - cat_missing) * 4)  # 4 points par colonne cat trouvée
 
-# === CRÉATION DATASET DE SORTIE ===
-print("\n💾 10. SAUVEGARDE RÉSULTATS...")
+if compatibility_score >= 80:
+    verdict = "🟢 EXCELLENT - Pipeline directement applicable"
+elif compatibility_score >= 60:
+    verdict = "🟡 BON - Adaptations mineures nécessaires"
+elif compatibility_score >= 40:
+    verdict = "🟠 MOYEN - Adaptations importantes nécessaires"
+else:
+    verdict = "🔴 PROBLÉMATIQUE - Refonte majeure nécessaire"
 
-# Convertir en DataFrame pour Dataiku
-results_rows = []
+print(f"📊 Score compatibilité: {compatibility_score}/100")
+print(f"🎯 Verdict: {verdict}")
+
+# === SAUVEGARDE RÉSULTATS RAPIDES ===
+print(f"\n💾 9. SAUVEGARDE RÉSULTATS...")
+
+# Créer un DataFrame de résultats condensé
+results_data = []
 
 # Résumé global
-results_rows.append(
+results_data.append(
     {
-        "analysis_type": "SUMMARY",
-        "partition": "ALL_2024",
-        "metric": "estimated_total_rows",
-        "value": estimated_total_rows_2024,
-        "details": json.dumps(volumetry_estimation),
+        "metric_type": "SUMMARY",
+        "metric_name": "sample_size",
+        "value": total_rows,
+        "details": f"Columns: {total_columns}, Memory: {memory_mb:.1f}MB, Method: {method}",
     }
 )
 
-# Détails par partition
-for partition, details in analysis_results.items():
-    results_rows.append(
-        {
-            "analysis_type": "PARTITION",
-            "partition": partition,
-            "metric": "rows_analyzed",
-            "value": details.get("rows_sampled", 0),
-            "details": json.dumps(details),
-        }
-    )
+results_data.append(
+    {
+        "metric_type": "COMPATIBILITY",
+        "metric_name": "compatibility_score",
+        "value": compatibility_score,
+        "details": verdict,
+    }
+)
 
 # Colonnes manquantes
-for col in missing_seq_cols + missing_cat_cols:
-    results_rows.append(
+for missing_col in all_missing:
+    results_data.append(
         {
-            "analysis_type": "MISSING_COLUMN",
-            "partition": "ALL",
-            "metric": col,
+            "metric_type": "MISSING_COLUMN",
+            "metric_name": missing_col,
             "value": 0,
-            "details": json.dumps(similar_cols.get(col, [])),
+            "details": json.dumps(similar_suggestions.get(missing_col, [])),
         }
     )
 
 # Recommandations
 for i, rec in enumerate(recommendations):
-    results_rows.append(
+    results_data.append(
         {
-            "analysis_type": "RECOMMENDATION",
-            "partition": "ALL",
-            "metric": f"recommendation_{i + 1}",
+            "metric_type": "RECOMMENDATION",
+            "metric_name": f"recommendation_{i + 1}",
             "value": 1,
             "details": rec,
         }
     )
 
-# DataFrame final
-df_results = pd.DataFrame(results_rows)
+# Estimations
+results_data.append(
+    {
+        "metric_type": "ESTIMATION",
+        "metric_name": "estimated_rows_2024",
+        "value": estimated_rows_2024,
+        "details": f"Memory: {estimated_memory_gb:.1f}GB, Time: {estimated_processing_hours:.1f}h",
+    }
+)
 
-# Ajouter métadonnées
+# Créer DataFrame
+df_results = pd.DataFrame(results_data)
 df_results["analysis_date"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-df_results["compatible_with_test"] = target_present and len(missing_seq_cols) == 0
+df_results["ready_for_pipeline"] = compatibility_score >= 60
 
-print(f"✅ Résultats préparés: {len(df_results)} lignes d'analyse")
+print(f"✅ {len(df_results)} résultats préparés")
 
-# === ÉCRITURE OUTPUT DATAIKU ===
+# Sauvegarder
 try:
     output_dataset.write_with_schema(df_results)
-    print("✅ Résultats sauvegardés dans T4REC_ANALYSIS_PHASE1")
+    print("✅ Résultats sauvegardés dans T4REC_SAMPLE_ANALYSIS")
 except Exception as e:
     print(f"⚠️ Erreur sauvegarde: {e}")
-    print("📊 Résultats disponibles en mémoire:")
-    print(df_results.head())
+    print("📊 Aperçu résultats:")
+    print(df_results[["metric_type", "metric_name", "value"]].head(10))
 
-# === RÉSUMÉ FINAL ===
-print("\n" + "=" * 70)
-print("🎯 RÉSUMÉ PHASE 1 - EXPLORATION TERMINÉE")
-print("=" * 70)
-
-if df_structure_sample is not None:
-    print(
-        f"📊 Dataset: {len(all_columns)} colonnes, ~{estimated_total_rows_2024:,} lignes 2024"
-    )
-    print(
-        f"🎯 Compatibilité test: {'✅ OUI' if target_present and len(missing_seq_cols) == 0 else '❌ NON'}"
-    )
-    print(f"💾 Mémoire estimée: {estimated_memory_gb:.1f}GB")
-    print(
-        f"⏱️ Temps estimé: {volumetry_estimation.get('estimated_processing_time_hours', '?')}h"
-    )
-
-    if recommendations:
-        print(f"\n⚠️ {len(recommendations)} recommandations importantes:")
-        for rec in recommendations[:3]:
-            print(f"   • {rec}")
-
-    print(
-        f"\n📋 Prochaine étape: {'Phase 2 - Adaptation pipeline' if target_present else 'Corriger colonnes manquantes'}"
-    )
-
+print("\n" + "=" * 65)
+if compatibility_score >= 60:
+    print("🚀 PRÊT POUR PHASE 2 - Adaptation pipeline T4Rec")
 else:
-    print("❌ Échec analyse - Vérifier connexion dataset")
-
-print("=" * 70)
+    print("🔧 CORRECTIONS NÉCESSAIRES avant Phase 2")
+print("=" * 65)
