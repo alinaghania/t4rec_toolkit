@@ -124,7 +124,7 @@ try:
         total_seq_length=CONFIG['max_sequence_length'],
         mem_len=CONFIG['mem_len'],
         dropout=CONFIG['dropout'],
-        pad_token_id=0,
+        # SUPPRIMER pad_token_id car il y a déjà pad_token dans XLNetConfig.build()
         vocab_size=CONFIG['vocab_size'],
         attn_type='bi',
         initializer_range=0.02,
