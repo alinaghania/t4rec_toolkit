@@ -264,8 +264,9 @@ class SequenceTransformer(BaseTransformer):
             else:
                 self.logger.warning(msg)
 
-        # Continuer avec le fit standard
-        return super().fit(data, feature_columns, **kwargs)
+        # Marquer comme fitted et retourner self pour le chaînage
+        self.is_fitted = True
+        return self
 
     def transform(self, data: pd.DataFrame) -> TransformationResult:
         """
@@ -358,5 +359,4 @@ class SequenceTransformer(BaseTransformer):
                 continue
 
         return suitable_columns
-
 
