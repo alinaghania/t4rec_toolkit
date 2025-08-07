@@ -69,24 +69,41 @@ try:
     user_categories = np.array(base_cat[:n_samples]) % 15  # Limiter à 15 catégories
     print(f"✅ user_category: {len(np.unique(user_categories))} uniques")
 
-    # Créer les colonnes pour le schéma
+    # Créer les colonnes pour le schéma avec les bons tags pour T4Rec 23.04.00
     columns = [
         ColumnSchema(
             "item_id",
-            tags=[Tags.ITEM_ID, Tags.CATEGORICAL],
+            tags=[Tags.ITEM_ID, Tags.CATEGORICAL, Tags.ITEM],
             dtype=np.int32,
-            properties={"vocab_size": len(np.unique(item_ids))},
+            properties={
+                "domain": {"min": 1, "max": 100},
+                "vocab_size": len(np.unique(item_ids)),
+            },
         ),
         ColumnSchema(
             "user_category",
-            tags=[Tags.USER_ID, Tags.CATEGORICAL],
+            tags=[Tags.USER_ID, Tags.CATEGORICAL, Tags.USER],
             dtype=np.int32,
-            properties={"vocab_size": len(np.unique(user_categories))},
+            properties={
+                "domain": {"min": 0, "max": 14},
+                "vocab_size": len(np.unique(user_categories)),
+            },
         ),
     ]
 
     schema = Schema(columns)
     print(f"✅ Schéma créé avec {len(columns)} colonnes")
+
+    # Vérification du schéma
+    print(f"🔍 Tags du schéma:")
+    for col in schema:
+        print(f"  - {col.name}: {col.tags}")
+
+    # S'assurer que les tags requis sont présents
+    item_cols = schema.select_by_tag(Tags.ITEM_ID)
+    cat_cols = schema.select_by_tag(Tags.CATEGORICAL)
+    print(f"✅ Colonnes ITEM_ID: {len(item_cols)}")
+    print(f"✅ Colonnes CATEGORICAL: {len(cat_cols)}")
 
     # 2. Préparer les données pour T4Rec
     print("\n📊 Préparation des données T4Rec...")
