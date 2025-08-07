@@ -1,128 +1,184 @@
-import transformers4rec.torch as tr
-from transformers4rec.torch.model.head import Head
-from transformers4rec.config.model import XLNetConfig
-from transformers4rec.torch.masking import MaskSequence
-from transformers4rec.torch.utils import schema_utils
-from transformers4rec.torch.models.sequential import NextItemPredictionTask
-from merlin.schema import Schema, Tags, ColumnSchema
-import pandas as pd
-import numpy as np
-import torch
-from torch.utils.data import DataLoader
-from merlin.io import Dataset
-from transformers4rec.torch.utils.examples_utils import generate_schema
-
-from transformers4rec.torch.metrics.ranking import NDCGAt, RecallAt
-
+# 🚀 T4REC XLNET - FEATURES CATÉGORIELLES UNIQUEMENT - STABLE
 print("🚀 T4REC XLNET - FEATURES CATÉGORIELLES UNIQUEMENT - STABLE")
-print("="*65)
+print("=" * 65)
 
-# -----------------------
-# 1. Création du schéma
-# -----------------------
-print("📋 Création du schéma catégoriel...")
-
-schema = Schema([
-    ColumnSchema("item_id", tags=[Tags.ITEM_ID, Tags.CATEGORICAL]),
-    ColumnSchema("user_category", tags=[Tags.USER, Tags.CATEGORICAL])
-])
-print(f"✅ Schéma défini avec {len(schema.column_names)} colonnes: {schema.column_names}")
-
-# -----------------------
-# 2. Données d'exemple
-# -----------------------
-print("📊 Génération de données d'exemple...")
-
-num_samples = 560
-max_session_len = 20
-item_ids = np.random.randint(1, 100, size=(num_samples,))
-user_cats = np.random.choice([f"cat_{i}" for i in range(1, 15)], size=(num_samples,))
-session_id = np.repeat(np.arange(num_samples // max_session_len), max_session_len)
-
-df = pd.DataFrame({
-    "item_id": item_ids,
-    "user_category": user_cats,
-    "session_id": session_id
-})
-
-dataset = Dataset(df)
-print(f"✅ Données prêtes: item_id ({df['item_id'].nunique()} uniques), user_category ({df['user_category'].nunique()} uniques)")
-
-# -----------------------
-# 3. Module d'entrée
-# -----------------------
-print("🏗️ Construction du module d'entrée...")
-
-input_module = tr.TabularSequenceFeatures.from_schema(
-    schema,
-    max_sequence_length=max_session_len,
-    continuous_projection=None,
-    aggregation="concat",
-)
-
-print("✅ Module d'entrée: TabularSequenceFeatures")
-
-# -----------------------
-# 4. Masking
-# -----------------------
-print("🎭 Configuration du masking...")
-
-masking = MaskSequence(max_sequence_length=max_session_len)
-input_module.masking = masking
-
-print("✅ Masking activé: MaskSequence")
-
-# -----------------------
-# 5. XLNet config
-# -----------------------
-print("⚙️ Configuration du modèle XLNet...")
-
-xlnet_config = XLNetConfig.build(
-    d_model=128,
-    n_head=4,
-    n_layer=2,
-    total_seq_length=max_session_len,
-)
-
-print("✅ XLNet configuré: 128d, 4 heads, 2 layers")
-
-# -----------------------
-# 6. Body du modèle
-# -----------------------
-print("🧱 Construction du corps du modèle...")
-
-transformer_block = tr.Block(
-    tr.TransformerBlock(xlnet_config, masking=input_module.masking),
-    output_size=128  # Important!
-)
-
-body = tr.SequentialBlock(
-    input_module,
-    transformer_block
-)
-
-print("✅ Corps du modèle prêt: SequentialBlock")
-
-# -----------------------
-# 7. Head
-# -----------------------
-print("🧠 Ajout de la tête NextItemPredictionTask...")
+import torch
+import transformers4rec.torch as tr
+import numpy as np
+import pandas as pd
+from sklearn.preprocessing import LabelEncoder
+from sklearn.model_selection import train_test_split
 
 try:
-    head = Head(
-        body,
-        NextItemPredictionTask(
-            weight_tying=True,
-            metrics=[
-                NDCGAt(top_ks=[5, 10], labels_onehot=True),
-                RecallAt(top_ks=[5, 10], labels_onehot=True)
-            ],
-            loss_function="cross_entropy"
-        ),
-        inputs=input_module
+    # === CONFIGURATION ===
+    CONFIG = {
+        'd_model': 128,
+        'n_head': 4,
+        'n_layer': 2,
+        'max_sequence_length': 15,
+        'mem_len': 30,
+        'dropout': 0.1,
+        'hidden_size': 128  # Pour MaskSequence
+    }
+
+    # === SCHÉMA T4REC ===
+    print("📋 Création du schéma catégoriel...")
+
+    from merlin.schema import Schema, ColumnSchema, Tags
+
+    columns = [
+        ColumnSchema("item_id", tags=[Tags.CATEGORICAL, Tags.ITEM, Tags.ID],
+                     dtype=np.int32, properties={"domain": {"min": 1, "max": 100}}),
+        ColumnSchema("user_category", tags=[Tags.CATEGORICAL, Tags.USER],
+                     dtype=np.int32, properties={"domain": {"min": 1, "max": 20}})
+    ]
+
+    schema = Schema(columns)
+    print(f"✅ Schéma défini avec {len(schema)} colonnes: {[col.name for col in schema]}")
+
+    # === DONNÉES DUMMY ===
+    print("\n📊 Génération de données d'exemple...")
+
+    n_samples = 560
+    item_ids = np.arange(n_samples) % 99 + 1
+    user_categories = np.random.randint(1, 15, n_samples)
+
+    t4rec_data = {
+        "item_id": item_ids.astype(np.int64),
+        "user_category": user_categories.astype(np.int64)
+    }
+
+    print(f"✅ Données prêtes: item_id ({len(np.unique(item_ids))} uniques), user_category ({len(np.unique(user_categories))} uniques)")
+
+    # === MODULE D'ENTRÉE ===
+    print("\n🏗️ Construction du module d'entrée...")
+
+    input_module = tr.TabularSequenceFeatures.from_schema(
+        schema=schema,
+        max_sequence_length=CONFIG['max_sequence_length'],
+        aggregation="concat",
+        masking=None,
+        automatic_build=False
     )
-    print("✅ Tête ajoutée avec succès !")
+    print(f"✅ Module d'entrée: {type(input_module).__name__}")
+
+    # === MASKING ===
+    print("\n🎭 Configuration du masking...")
+
+    from transformers4rec.torch.masking import MaskSequence
+
+    try:
+        masking_module = MaskSequence(
+            schema=schema.select_by_tag(Tags.ITEM),
+            hidden_size=CONFIG['hidden_size'],
+            max_sequence_length=CONFIG['max_sequence_length'],
+            masking_prob=0.2,
+            padding_idx=0
+        )
+        input_module.masking = masking_module
+        print(f"✅ Masking activé: {type(masking_module).__name__}")
+    except Exception as err:
+        print(f"⚠️ Erreur masking: {err}")
+        input_module.masking = None
+
+    # === CONFIGURATION XLNET ===
+    print("\n⚙️ Configuration du modèle XLNet...")
+
+    xlnet_config = tr.XLNetConfig.build(
+        d_model=CONFIG['d_model'],
+        n_head=CONFIG['n_head'],
+        n_layer=CONFIG['n_layer'],
+        total_seq_length=CONFIG['max_sequence_length'],
+        mem_len=CONFIG['mem_len'],
+        dropout=CONFIG['dropout'],
+        attn_type='bi',
+        initializer_range=0.02,
+        hidden_act='gelu',
+        layer_norm_eps=1e-12
+    )
+
+    print(f"✅ XLNet configuré: {CONFIG['d_model']}d, {CONFIG['n_head']} heads, {CONFIG['n_layer']} layers")
+
+    # === CORPS DU MODÈLE ===
+    print("\n🧱 Construction du corps du modèle...")
+
+    transformer_block = tr.Block(
+        tr.TransformerBlock(xlnet_config, masking=input_module.masking),
+        output_size=CONFIG['d_model']
+    )
+
+    body = tr.SequentialBlock(
+        input_module,
+        transformer_block
+    )
+
+    print(f"✅ Corps du modèle prêt: {type(body).__name__}")
+
+    # === TÊTE DU MODÈLE ===
+    print("\n🧠 Ajout de la tête NextItemPredictionTask...")
+
+    from transformers4rec.torch.ranking_metric import NDCGAt, RecallAt
+
+    task = tr.NextItemPredictionTask(
+        weight_tying=True,
+        metrics=[
+            NDCGAt(top_ks=[5, 10], labels_onehot=True),
+            RecallAt(top_ks=[5, 10], labels_onehot=True)
+        ],
+        loss_function="cross_entropy"
+    )
+
+    head = tr.Head(
+    body,
+    tr.NextItemPredictionTask(   # ✅ Corrigé
+        weight_tying=True,
+        metrics=[
+            NDCGAt(top_ks=[5, 10], labels_onehot=True),
+            RecallAt(top_ks=[5, 10], labels_onehot=True)
+        ],
+        loss_function="cross_entropy"
+    ),
+    inputs=input_module
+    )
+
+    # === MODÈLE FINAL ===
+    print("\n🚀 Initialisation du modèle T4Rec...")
+
+    model = tr.Model(head)
+
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"✅ Modèle T4Rec construit avec {n_params:,} paramètres")
+
+    # === TEST AVEC BATCH DUMMY ===
+    print("\n🧪 Test du modèle sur un batch...")
+
+    batch_size = 16
+    sequenced_batch = {}
+
+    for key, data in t4rec_data.items():
+        tensor = torch.tensor(data[:batch_size], dtype=torch.long)
+        seq_tensor = tensor.unsqueeze(1).expand(-1, CONFIG['max_sequence_length'])
+        sequenced_batch[key] = seq_tensor
+
+    print(f"📦 Batch de test: {[(k, v.shape) for k, v in sequenced_batch.items()]}")
+
+    model.eval()
+    with torch.no_grad():
+        try:
+            output = model(sequenced_batch)
+            print(f"✅ Test réussi ! Output shape: {output.shape}")
+        except Exception as e:
+            print(f"❌ Test échoué : {e}")
+            import traceback
+            traceback.print_exc()
+
 except Exception as e:
-    print("❌ ERREUR GÉNÉRALE :", str(e))
-    print("📑 Schéma avec", len(schema.column_names), "colonnes :", schema.column_names)
-    raise
+    print(f"\n❌ ERREUR GÉNÉRALE : {e}")
+    import traceback
+    traceback.print_exc()
+    if 'schema' in locals():
+        try:
+            print(f"📑 Schéma avec {len(schema)} colonnes : {[col.name for col in schema]}")
+        except Exception as debug_err:
+            print(f"⚠️ Impossible d'accéder aux colonnes : {debug_err}")
+
