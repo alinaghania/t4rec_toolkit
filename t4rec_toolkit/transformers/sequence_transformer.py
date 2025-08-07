@@ -316,3 +316,46 @@ class SequenceTransformer(BaseTransformer):
             },
         }
 
+    def _auto_detect_features(self, data: pd.DataFrame) -> List[str]:
+        """
+        Détecte automatiquement les colonnes appropriées pour la transformation séquentielle.
+
+        Args:
+            data: DataFrame à analyser
+
+        Returns:
+            Liste des noms de colonnes adaptées à la transformation séquentielle
+        """
+        suitable_columns = []
+
+        for col in data.columns:
+            try:
+                # Vérifier si la colonne contient des données numériques ou convertibles
+                series = data[col]
+
+                # Ignorer les colonnes avec trop de valeurs manquantes
+                if series.isnull().sum() / len(series) > 0.5:
+                    continue
+
+                # Vérifier si la colonne est numérique ou peut être convertie
+                if pd.api.types.is_numeric_dtype(series):
+                    suitable_columns.append(col)
+                elif pd.api.types.is_object_dtype(series):
+                    # Essayer de convertir en numérique
+                    try:
+                        pd.to_numeric(series.dropna().head(100))
+                        suitable_columns.append(col)
+                    except (ValueError, TypeError):
+                        # Vérifier si c'est une séquence de nombres (format string)
+                        sample_values = series.dropna().head(10)
+                        if len(sample_values) > 0:
+                            first_val = str(sample_values.iloc[0])
+                            # Chercher des patterns de séquences : [1,2,3] ou "1 2 3"
+                            if any(char in first_val for char in ["[", ",", " "]):
+                                suitable_columns.append(col)
+
+            except Exception:
+                continue
+
+        return suitable_columns
+
